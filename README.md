@@ -1,0 +1,182 @@
+# FFmpeg VVC Full Build
+
+One-script FFmpeg build for **Linux (x86_64)** and **Windows (x86_64, MSYS2)** with H.266/VVC, WebRTC (WHIP/WHEP), SRT, RTMP and hardware acceleration.
+
+[中文说明](README.zh-CN.md)
+
+| Category | Features |
+|---|---|
+| Video encode | H.266/VVC ([vvenc](https://github.com/fraunhoferhhi/vvenc)), H.264 (x264), H.265 (x265) |
+| Video decode | H.266/VVC ([vvdec](https://github.com/fraunhoferhhi/vvdec) + FFmpeg native VVC decoder), H.264, H.265 |
+| Audio | MP3 (lame), AAC (native encoder, optional fdk-aac), Opus (libopus) |
+| Streaming protocols | SRT (libsrt), RTMP/RTMPS (native), **WHIP/WHEP (WebRTC)** |
+| HW acceleration | NVIDIA NVENC/NVDEC/CUVID, Intel QSV (libvpl), AMD AMF (Windows), D3D11VA/DXVA2 (Windows), VA-API/VDPAU (Linux) |
+
+> **WebRTC note:** FFmpeg ships a **native WHIP muxer and WHEP demuxer since 8.0** (merged to master in June 2025) — no third-party libdatachannel fork required. This script builds `release/8.0` by default.
+
+---
+
+## 1. Usage
+
+### Linux (Ubuntu 22.04+ / Debian 12+ / Fedora / Arch)
+
+```bash
+chmod +x build.sh
+./build.sh     # installs system deps -> builds libraries -> builds ffmpeg -> verifies -> packages
+```
+
+### Windows
+
+1. Install [MSYS2](https://www.msys2.org/).
+2. Open an **MSYS2 UCRT64** (or MINGW64) shell.
+3. Run:
+
+```bash
+cd /d/path/to/this/folder
+./build.sh
+```
+
+### Artifacts
+
+- `dist/ffmpeg-<version>-linux-x86_64.tar.gz` (contains `bin/ffmpeg`, `bin/ffprobe`)
+- `dist/ffmpeg-<version>-windows-x86_64.tar.gz` / `.zip` (`ffmpeg.exe` etc.; a fully static single-file exe is attempted by default)
+
+> Run the script once per platform to get the Linux and Windows artifacts respectively.
+> Cross-compiling Windows binaries from Linux requires a mingw-w64 cross toolchain plus cross-built
+> dependencies and is not covered by this script.
+
+### Environment overrides
+
+```bash
+JOBS=16 ./build.sh               # parallel jobs
+FORCE=1 ./build.sh deps          # rebuild dependencies even if stamps exist
+SKIP_SYSDEPS=1 ./build.sh        # do not install system packages (bring your own)
+ENABLE_FDK=1 ./build.sh          # also build/link libfdk-aac (GPL-incompatible, personal use only)
+ENABLE_QSV=0 ./build.sh          # skip Intel QSV
+ENABLE_NVIDIA=0 ./build.sh       # skip NVENC/NVDEC
+ENABLE_FFPLAY=1 ./build.sh       # also build ffplay (requires SDL2)
+WINDOWS_FULLY_STATIC=0 ./build.sh# do not attempt a fully static Windows exe
+FFMPEG_REF=master ./build.sh     # build ffmpeg master instead of release/8.0
+GITHUB_MIRROR=https://ghproxy.net/https://github.com ./build.sh   # GitHub mirror prefix
+```
+
+Stages: `./build.sh sysdeps | deps | ffmpeg | verify | package | clean`
+
+---
+
+## 2. Examples
+
+### 2.1 H.266/VVC transcoding (software only — no consumer GPU supports VVC yet)
+
+```bash
+# Encode to H.266 (libvvenc + opus)
+ffmpeg -i input.mp4 -c:v libvvenc -preset medium -b:v 2M -c:a libopus -b:a 128k output.mkv
+
+# vvenc presets: faster/fast/medium/slow/slower — trade speed for compression
+ffmpeg -i input.mp4 -c:v libvvenc -preset fast -qp 32 output.mkv
+
+# Decode H.266 (libvvdec) and transcode back to H.264
+ffmpeg -c:v libvvdec -i output.mkv -c:v libx264 -crf 20 -c:a aac back.mp4
+# Note: FFmpeg 7.0+ also has a native VVC decoder; the best available decoder is picked automatically
+```
+
+### 2.2 SRT live push/pull
+
+```bash
+# Push (caller mode), H.264 + AAC, low-latency settings
+ffmpeg -re -stream_loop -1 -i input.mp4 \
+  -c:v libx264 -preset veryfast -tune zerolatency -g 60 -b:v 3M \
+  -c:a aac -b:a 128k \
+  -f mpegts "srt://SERVER:9000?mode=caller&streamid=live/stream1&latency=120"
+
+# Listen as an SRT server and record
+ffmpeg -i "srt://:9000?mode=listener" -c copy -f mpegts output.ts
+
+# H.266 over SRT (note: most players cannot handle VVC in MPEG-TS yet; fine for private links/relays)
+ffmpeg -re -i input.mp4 -c:v libvvenc -preset faster -b:v 1500k -c:a libmp3lame \
+  -f mpegts "srt://SERVER:9000?mode=caller"
+```
+
+### 2.3 RTMP push
+
+```bash
+ffmpeg -re -i input.mp4 -c:v libx264 -tune zerolatency -b:v 2500k -c:a aac -ar 44100 \
+  -f flv rtmp://SERVER/live/streamkey
+# RTMPS works the same way: rtmps://... (via the built-in TLS stack)
+```
+
+### 2.4 WebRTC (WHIP push / WHEP pull)
+
+WHIP/WHEP use HTTP(S) signaling + SRTP media, natively supported in FFmpeg >= 8.0:
+
+```bash
+# WHIP push (video must be H.264/VP8/AV1, audio Opus — WebRTC does not support H.265/H.266)
+ffmpeg -re -i input.mp4 \
+  -c:v libx264 -profile:v baseline -tune zerolatency -g 60 -b:v 2M \
+  -c:a libopus -b:a 64k \
+  -f whip "http://SERVER:8080/whip/live"
+# Auth example: -headers $'Authorization: Bearer <token>\r\n'
+
+# WHEP pull and record/remux
+ffmpeg -i "http://SERVER:8080/whep/live" -c copy output.mp4
+
+# WHEP pull -> SRT forward (WebRTC to live streaming bridge)
+ffmpeg -i "http://SERVER:8080/whep/live" -c copy -f mpegts "srt://SERVER:9000?mode=caller"
+```
+
+> Run `ffmpeg -h muxer=whip` / `ffmpeg -h demuxer=whep` for all options (ICE servers, DTLS, etc.).
+
+### 2.5 Hardware acceleration
+
+```bash
+# List available hwaccels
+ffmpeg -hwaccels
+
+# NVIDIA (NVENC/NVDEC/CUVID)
+ffmpeg -hwaccel cuda -hwaccel_output_format cuda -i in.mp4 -c:v h264_nvenc -preset p5 -b:v 4M out.mp4
+ffmpeg -i in.mp4 -c:v hevc_nvenc -rc vbr -cq 24 out.mp4
+ffmpeg -c:v h264_cuvid -i in.mp4 ...            # NVDEC decode
+
+# Intel QSV (libvpl)
+ffmpeg -init_hw_device qsv=hw -hwaccel qsv -i in.mp4 -c:v h264_qsv -preset veryfast -b:v 4M out.mp4
+ffmpeg -i in.mp4 -c:v hevc_qsv -global_quality 24 out.mp4
+
+# AMD AMF (Windows)
+ffmpeg -i in.mp4 -c:v h264_amf -quality speed -rc cqp -qp_i 20 -qp_p 22 out.mp4
+
+# Linux VA-API
+ffmpeg -init_hw_device vaapi=hw:/dev/dri/renderD128 -hwaccel vaapi \
+  -hwaccel_output_format vaapi -i in.mp4 -c:v h264_vaapi -b:v 4M out.mp4
+
+# Windows D3D11VA (decode)
+ffmpeg -hwaccel d3d11va -i in.mp4 -c:v libx264 out.mp4
+```
+
+Runtime requirements:
+- **NVIDIA**: official GPU driver (build time only needs nv-codec-headers, handled automatically);
+- **Intel QSV**: Linux needs `intel-media-driver` (iHD) or `intel-vaapi-driver`; Windows needs the Intel GPU driver;
+- **AMD AMF**: Windows + AMD GPU driver;
+- **VA-API**: Linux driver exposing `/dev/dri/renderD128`.
+
+---
+
+## 3. Licensing & patents
+
+- The default build is **GPL** (x264/x265); distribute the resulting binaries under the GPL;
+- TLS defaults to **gnutls** (Linux) / **schannel** (Windows), avoiding `--enable-nonfree`.
+  If gnutls is missing on Linux and it falls back to openssl, the script adds `--enable-nonfree`
+  automatically — the result is then **not redistributable**;
+- `ENABLE_FDK=1` adds fdk-aac, which is GPL-incompatible — personal use only;
+- **VVC/H.266 patents**: vvenc/vvdec are BSD-3-Clause-Clear licensed, but VVC coding tools are
+  covered by patent pools (e.g. Access Advance VVC). Evaluate licensing for commercial use.
+
+## 4. Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| Slow/failing GitHub clones | `GITHUB_MIRROR=https://ghproxy.net/https://github.com ./build.sh` |
+| cmake too old (< 3.19) | `pip install cmake` or use a newer distro |
+| Fully static Windows link fails | The script automatically retries non-static; or rerun with `WINDOWS_FULLY_STATIC=0 ./build.sh ffmpeg` |
+| Dependency failed, rerunning | `./build.sh deps` skips already-succeeded libraries (stamp files); `FORCE=1` rebuilds everything |
+| Cross-compile Windows build on Linux | Needs mingw-w64 + cross-built deps; run this script inside MSYS2 on Windows instead |
+| No VVC hardware codec? | Correct — no mainstream GPU supports VVC encode/decode yet; vvenc/vvdec are software-only and encoding is slow by nature |

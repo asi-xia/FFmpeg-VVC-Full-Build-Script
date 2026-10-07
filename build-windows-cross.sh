@@ -338,6 +338,24 @@ build_libvpl() {
   mark_done libvpl
 }
 
+# FFmpeg's configure probes libvpl with `#include <mfxvideo.h>` (no vpl/ prefix)
+# and links MFXLoad; source-built vpl.pc misses the header subdir and the
+# system libs required by the static dispatcher. Patch it (idempotent).
+fix_vpl_pc() {
+  local pc="$PREFIX/lib/pkgconfig/vpl.pc"
+  [ -f "$pc" ] || return 0
+  log "Patching vpl.pc for FFmpeg compatibility"
+  grep -q 'includedir}/vpl' "$pc" || sed -i 's|^Cflags:.*|& -I${includedir}/vpl|' "$pc"
+  local need="-ldxgi -ld3d11 -lole32 -luuid -ladvapi32"
+  if ! grep -qF -- "-ldxgi" "$pc"; then
+    if grep -q '^Libs.private:' "$pc"; then
+      sed -i "s|^Libs.private:.*|& $need|" "$pc"
+    else
+      echo "Libs.private: $need" >> "$pc"
+    fi
+  fi
+}
+
 build_fdk() {
   [ "$ENABLE_FDK" = "1" ] || return 0
   stamp_done fdk-aac && return 0
@@ -371,6 +389,7 @@ build_deps() {
 build_ffmpeg() {
   log "Cross-building FFmpeg ($FFMPEG_REF) for Windows x86_64"
   git_clone ffmpeg "$FFMPEG_GIT" "$FFMPEG_REF"
+  fix_vpl_pc
 
   local FLAGS=()
   FLAGS+=(

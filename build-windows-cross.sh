@@ -40,19 +40,19 @@ LAME_VERSION="${LAME_VERSION:-3.100}"
 LAME_URL="${LAME_URL:-https://downloads.sourceforge.net/project/lame/lame/$LAME_VERSION/lame-$LAME_VERSION.tar.gz}"
 LAME_SHA256="${LAME_SHA256:-ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e}"
 OPUS_REPO="${OPUS_REPO:-$GITHUB/xiph/opus}"
-OPUS_REF="${OPUS_REF:-v1.5.2}"
+OPUS_REF="${OPUS_REF:-v1.6.1}"
 X264_REPO="${X264_REPO:-https://code.videolan.org/videolan/x264.git}"
 X264_REF="${X264_REF:-stable}"
 X265_REPO="${X265_REPO:-https://bitbucket.org/multicoreware/x265_git.git}"
-X265_REF="${X265_REF:-Release_4.1}"
+X265_REF="${X265_REF:-4.2}"
 SRT_REPO="${SRT_REPO:-$GITHUB/Haivision/srt}"
-SRT_REF="${SRT_REF:-v1.5.4}"
+SRT_REF="${SRT_REF:-v1.5.7}"
 OPENSSL_REPO="${OPENSSL_REPO:-$GITHUB/openssl/openssl}"
-OPENSSL_REF="${OPENSSL_REF:-openssl-3.3.2}"
+OPENSSL_REF="${OPENSSL_REF:-openssl-3.5.9}"
 VVENC_REPO="${VVENC_REPO:-$GITHUB/fraunhoferhhi/vvenc}"
-VVENC_REF="${VVENC_REF:-v1.13.0}"
+VVENC_REF="${VVENC_REF:-v1.14.0}"
 VVDEC_REPO="${VVDEC_REPO:-$GITHUB/fraunhoferhhi/vvdec}"
-VVDEC_REF="${VVDEC_REF:-v2.3.1}"
+VVDEC_REF="${VVDEC_REF:-v3.2.1}"
 FFNVENCODER_REPO="${FFNVENCODER_REPO:-https://git.videolan.org/git/ffmpeg/nv-codec-headers.git}"
 FFNVENCODER_REF="${FFNVENCODER_REF:-}"
 AMF_REPO="${AMF_REPO:-$GITHUB/GPUOpen-LibrariesAndSDKs/AMF}"
@@ -270,6 +270,11 @@ build_x265() {
   stamp_done x265 && return 0
   log "Building x265 (H.265 encoder)"
   git_clone x265 "$X265_REPO" "$X265_REF"
+  # x265 derives its version via `git describe`; shallow clones carry no tags -> tag HEAD
+  git -C "$SRC/x265" tag -f "${X265_REF##*/}" >/dev/null 2>&1 || true
+  # CMake >= 4 dropped support for CMP0025/CMP0054 OLD behavior
+  sed -i -E 's/cmake_policy\(SET (CMP0025|CMP0054) OLD\)/cmake_policy(SET \1 NEW)/' \
+    "$SRC/x265/source/CMakeLists.txt"
   cmake_dep x265/source -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_PIC=ON
   mark_done x265
 }

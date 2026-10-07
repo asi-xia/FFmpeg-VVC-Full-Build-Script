@@ -298,9 +298,11 @@ build_vvenc() {
 
 build_vvdec() {
   stamp_done vvdec && return 0
-  log "Building vvdec (H.266/VVC decoder)"
+  log "Building vvdec (H.266/VVC decoder + vvdecapp standalone tool)"
   git_clone vvdec "$VVDEC_REPO" "$VVDEC_REF"
-  cmake_dep vvdec -DBUILD_SHARED_LIBS=OFF
+  # NOTE: FFmpeg mainline has no libvvdec wrapper; ffmpeg decodes VVC with its
+  # native decoder. vvdecapp is shipped alongside as a fast standalone decoder.
+  cmake_dep vvdec -DBUILD_SHARED_LIBS=OFF -DVVDEC_INSTALL_VVDECAPP=ON
   mark_done vvdec
 }
 
@@ -387,10 +389,10 @@ build_ffmpeg() {
     --enable-static
     --disable-ffplay
     # video codecs
+    # (VVC decode = FFmpeg native decoder; mainline has no libvvdec wrapper)
     --enable-libx264
     --enable-libx265
     --enable-libvvenc
-    --enable-libvvdec
     # audio codecs
     --enable-libmp3lame
     --enable-libopus
@@ -476,7 +478,8 @@ verify() {
   }
 
   check "H.266/VVC encoder (libvvenc)"   "$WINE_BIN '$BIN' -hide_banner -encoders | grep -q libvvenc"
-  check "H.266/VVC decoder (libvvdec)"   "$WINE_BIN '$BIN' -hide_banner -decoders | grep -q libvvdec"
+  check "H.266/VVC decoder (native)"     "$WINE_BIN '$BIN' -hide_banner -decoders | grep -qE '^[[:space:]]*V[.A-Z]*[[:space:]]+vvc[[:space:]]'"
+  check "vvdecapp standalone decoder"    "[ -f '$PREFIX/bin/vvdecapp.exe' ]"
   check "H.264 encoder (libx264)"        "$WINE_BIN '$BIN' -hide_banner -encoders | grep -q libx264"
   check "H.265 encoder (libx265)"        "$WINE_BIN '$BIN' -hide_banner -encoders | grep -q libx265"
   check "MP3 encoder (libmp3lame)"       "$WINE_BIN '$BIN' -hide_banner -encoders | grep -q libmp3lame"
@@ -513,6 +516,8 @@ package() {
   rm -rf "$PKGDIR"; mkdir -p "$PKGDIR/bin"
   cp "$OUT/bin/"ffmpeg*.exe "$PKGDIR/bin/" 2>/dev/null || true
   cp "$OUT/bin/ffprobe*.exe" "$PKGDIR/bin/" 2>/dev/null || true
+  cp "$PREFIX/bin/vvdecapp"* "$PKGDIR/bin/" 2>/dev/null || true
+  cp "$PREFIX/bin/vvencapp"* "$PKGDIR/bin/" 2>/dev/null || true
   cp "$BASE_DIR/README.md" "$PKGDIR/" 2>/dev/null || true
   cp "$BASE_DIR/README.zh-CN.md" "$PKGDIR/" 2>/dev/null || true
 

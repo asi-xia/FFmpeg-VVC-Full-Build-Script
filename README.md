@@ -7,12 +7,14 @@ One-script FFmpeg build for **Linux (x86_64)** and **Windows (x86_64, MSYS2)** w
 | Category | Features |
 |---|---|
 | Video encode | H.266/VVC ([vvenc](https://github.com/fraunhoferhhi/vvenc)), H.264 (x264), H.265 (x265) |
-| Video decode | H.266/VVC ([vvdec](https://github.com/fraunhoferhhi/vvdec) + FFmpeg native VVC decoder), H.264, H.265 |
+| Video decode | H.266/VVC (FFmpeg **native** decoder), H.264, H.265 — plus bundled **`vvdecapp`** standalone VVC decoder from the [vvdec](https://github.com/fraunhoferhhi/vvdec) project |
 | Audio | MP3 (lame), AAC (native encoder, optional fdk-aac), Opus (libopus) |
 | Streaming protocols | SRT (libsrt), RTMP/RTMPS (native), **WHIP/WHEP (WebRTC)** |
 | HW acceleration | NVIDIA NVENC/NVDEC/CUVID, Intel QSV (libvpl), AMD AMF (Windows), D3D11VA/DXVA2 (Windows), VA-API/VDPAU (Linux) |
 
 > **WebRTC note:** FFmpeg ships a **native WHIP muxer and WHEP demuxer since 8.0** (merged to master in June 2025) — no third-party libdatachannel fork required. This script builds `release/8.0` by default.
+>
+> **VVC decoding note:** FFmpeg mainline has **no libvvdec wrapper** — `ffmpeg` decodes H.266 with its built-in native decoder (`-c:v vvc`). The (considerably faster) Fraunhofer vvdec is packaged alongside as the standalone tool `vvdecapp`, see section 2.1.
 
 ---
 
@@ -50,7 +52,7 @@ cd /d/path/to/this/folder
 
 ### Artifacts
 
-- `dist/ffmpeg-<version>-linux-x86_64.tar.gz` (contains `bin/ffmpeg`, `bin/ffprobe`)
+- `dist/ffmpeg-<version>-linux-x86_64.tar.gz` (contains `bin/ffmpeg`, `bin/ffprobe`, `bin/vvdecapp`)
 - `dist/ffmpeg-<version>-windows-x86_64.tar.gz` / `.zip` (`ffmpeg.exe` etc.; a fully static single-file exe is attempted by default)
 
 > Two ways to get the Windows artifacts: run `build.sh` inside MSYS2 on Windows, or run
@@ -86,9 +88,13 @@ ffmpeg -i input.mp4 -c:v libvvenc -preset medium -b:v 2M -c:a libopus -b:a 128k 
 # vvenc presets: faster/fast/medium/slow/slower — trade speed for compression
 ffmpeg -i input.mp4 -c:v libvvenc -preset fast -qp 32 output.mkv
 
-# Decode H.266 (libvvdec) and transcode back to H.264
-ffmpeg -c:v libvvdec -i output.mkv -c:v libx264 -crf 20 -c:a aac back.mp4
-# Note: FFmpeg 7.0+ also has a native VVC decoder; the best available decoder is picked automatically
+# Decode H.266 with FFmpeg's native VVC decoder and transcode back to H.264
+ffmpeg -i output.mkv -c:v libx264 -crf 20 -c:a aac back.mp4
+# The native decoder is selected automatically (or force with -c:v vvc); it is slower than vvdec
+
+# Fast VVC decoding via the bundled vvdecapp (standalone tool from the vvdec project)
+vvdecapp -b bitstream.266 -o decoded.y4m -t 8
+ffmpeg -i decoded.y4m -c:v libx264 -crf 20 back.mp4
 ```
 
 ### 2.2 SRT live push/pull
@@ -191,4 +197,4 @@ Runtime requirements:
 | Fully static Windows link fails | The script automatically retries non-static; or rerun with `WINDOWS_FULLY_STATIC=0 ./build.sh ffmpeg` |
 | Dependency failed, rerunning | `./build.sh deps` skips already-succeeded libraries (stamp files); `FORCE=1` rebuilds everything |
 | Cross-compile Windows build on Linux | Use `./build-windows-cross.sh` (mingw-w64). Install `wine` to enable automatic verification of the exe |
-| No VVC hardware codec? | Correct — no mainstream GPU supports VVC encode/decode yet; vvenc/vvdec are software-only and encoding is slow by nature |
+| No VVC hardware codec? | VVC **encoding** is software-only (vvenc) — no GPU supports it yet. VVC **decoding** via VA-API/QSV is emerging in FFmpeg 8.0+, but requires a GPU with VVC decode support; otherwise the native software decoder is used (bundled `vvdecapp` is faster) |

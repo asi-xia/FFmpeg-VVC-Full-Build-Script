@@ -7,13 +7,16 @@
 | 类别 | 支持内容 |
 |---|---|
 | 视频编码 | H.266/VVC ([vvenc](https://github.com/fraunhoferhhi/vvenc))、H.264 (x264)、H.265 (x265) |
-| 视频解码 | H.266/VVC ([vvdec](https://github.com/fraunhoferhhi/vvdec) + FFmpeg 原生 VVC 解码器)、H.264、H.265 |
+| 视频解码 | H.266/VVC（FFmpeg **原生**解码器）、H.264、H.265 —— 另附带 [vvdec](https://github.com/fraunhoferhhi/vvdec) 项目的独立解码工具 **`vvdecapp`** |
 | 音频 | MP3 (lame)、AAC (原生编码器，可选 fdk-aac)、Opus (libopus) |
 | 推拉流协议 | SRT (libsrt)、RTMP/RTMPS (原生)、**WHIP/WHEP (WebRTC)** |
 | 硬件加速 | NVIDIA NVENC/NVDEC/CUVID、Intel QSV (libvpl)、AMD AMF (Windows)、D3D11VA/DXVA2 (Windows)、VA-API/VDPAU (Linux) |
 
 > WebRTC 说明：FFmpeg **8.0 起原生内置 WHIP muxer / WHEP demuxer**（2025-06 合入主线），无需第三方
 > libdatachannel 分支。脚本默认使用 `release/8.0` 分支。
+>
+> VVC 解码说明：FFmpeg 主线**没有 libvvdec 包装器**（master 也没有），`ffmpeg` 解码 H.266 用的是内置
+> 原生解码器（`-c:v vvc`）。速度更快的 Fraunhofer vvdec 以独立工具 `vvdecapp` 的形式随包发布，见 2.1 节。
 
 ---
 
@@ -51,7 +54,7 @@ cd /d/path/to/this/folder   # 进入脚本目录
 
 ### 产物
 
-- `dist/ffmpeg-<版本>-linux-x86_64.tar.gz`（含 `bin/ffmpeg`、`bin/ffprobe`）
+- `dist/ffmpeg-<版本>-linux-x86_64.tar.gz`（含 `bin/ffmpeg`、`bin/ffprobe`、`bin/vvdecapp`）
 - `dist/ffmpeg-<版本>-windows-x86_64.tar.gz` / `.zip`（`ffmpeg.exe` 等，默认尝试全静态链接，单文件即可运行）
 
 > Windows 产物有两种获得方式：在 Windows 的 MSYS2 里运行 `build.sh`，或在 Linux 上运行
@@ -87,9 +90,13 @@ ffmpeg -i input.mp4 -c:v libvvenc -preset medium -b:v 2M -c:a libopus -b:a 128k 
 # 更快的预设: faster/fast/medium/slow (vvenc), 压缩率与速度成反比
 ffmpeg -i input.mp4 -c:v libvvenc -preset fast -qp 32 output.mkv
 
-# 解码 H.266 并转回 H.264（libvvdec 解码）
-ffmpeg -c:v libvvdec -i output.mkv -c:v libx264 -crf 20 -c:a aac back.mp4
-# 注: FFmpeg 7.0+ 也有原生 VVC 解码器（-c:v vvc），不加 -c:v 时会自动选择可用的解码器
+# 用 FFmpeg 原生 VVC 解码器解码 H.266 并转回 H.264
+ffmpeg -i output.mkv -c:v libx264 -crf 20 -c:a aac back.mp4
+# 原生解码器会自动被选中（也可显式 -c:v vvc）；速度比 vvdec 慢
+
+# 用附带的 vvdecapp 快速解码 VVC（vvdec 项目的独立工具）
+vvdecapp -b bitstream.266 -o decoded.y4m -t 8
+ffmpeg -i decoded.y4m -c:v libx264 -crf 20 back.mp4
 ```
 
 ### 2.2 SRT 实时推拉流
@@ -191,4 +198,4 @@ ffmpeg -hwaccel d3d11va -i in.mp4 -c:v libx264 out.mp4
 | Windows 全静态链接失败 | 脚本会自动回退为非全静态重试；或手动 `WINDOWS_FULLY_STATIC=0 ./build.sh ffmpeg` |
 | 某依赖编译失败后重跑 | 修好后 `./build.sh deps` 会自动跳过已成功的库（stamps 机制），`FORCE=1` 强制全部重建 |
 | 想在 Linux 交叉编译 Windows 版 | 使用 `./build-windows-cross.sh`（mingw-w64）；建议安装 `wine` 以便自动校验 exe 特性 |
-| H.266 没有硬件编解码？ | 是，目前主流 GPU 均不支持 VVC 硬编解码，只能软件（vvenc/vvdec），编码较慢属正常现象 |
+| H.266 没有硬件编解码？ | **编码**目前只有软件 vvenc（无 GPU 支持）。**解码**方面 FFmpeg 8.0+ 已出现 VA-API/QSV 硬件路径，但需要 GPU 本身支持 VVC 硬解（如 Intel 较新核显）；否则走原生软解（附带的 `vvdecapp` 速度更快） |

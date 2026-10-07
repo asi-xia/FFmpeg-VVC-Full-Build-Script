@@ -186,6 +186,7 @@ Runtime requirements:
 | Problem | Fix |
 |---|---|
 | Slow/failing GitHub clones | `GITHUB_MIRROR=https://ghproxy.net/https://github.com ./build.sh` |
+| lame tarball download fails (SourceForge) | Override with a mirror: `LAME_URL=<mirror-url> ./build.sh` (keep `LAME_SHA256` unless the file differs) |
 | cmake too old (< 3.19) | `pip install cmake` or use a newer distro |
 | Fully static Windows link fails | The script automatically retries non-static; or rerun with `WINDOWS_FULLY_STATIC=0 ./build.sh ffmpeg` |
 | Dependency failed, rerunning | `./build.sh deps` skips already-succeeded libraries (stamp files); `FORCE=1` rebuilds everything |

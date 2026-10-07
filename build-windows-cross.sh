@@ -36,8 +36,9 @@ GITHUB="${GITHUB_MIRROR:-https://github.com}"
 CROSS="${CROSS:-x86_64-w64-mingw32-}"
 HOST_TRIPLE="x86_64-w64-mingw32"
 
-LAME_REPO="${LAME_REPO:-https://git.code.sf.net/p/lame/lame}"
-LAME_REF="${LAME_REF:-RELEASE_3_100}"
+LAME_VERSION="${LAME_VERSION:-3.100}"
+LAME_URL="${LAME_URL:-https://downloads.sourceforge.net/project/lame/lame/$LAME_VERSION/lame-$LAME_VERSION.tar.gz}"
+LAME_SHA256="${LAME_SHA256:-ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e}"
 OPUS_REPO="${OPUS_REPO:-$GITHUB/xiph/opus}"
 OPUS_REF="${OPUS_REF:-v1.5.2}"
 X264_REPO="${X264_REPO:-https://code.videolan.org/videolan/x264.git}"
@@ -148,6 +149,20 @@ cmake_dep() {
 
 pkg_exists() { pkg-config --exists "$1" 2>/dev/null; }
 
+# download_tarball <url> <output-file>
+download_tarball() {
+  local url="$1" out="$2"
+  [ -f "$out" ] && return 0
+  log "Downloading $url"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL --retry 3 --connect-timeout 30 -o "$out" "$url"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -O "$out" "$url"
+  else
+    die "need curl or wget to download sources"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # System packages (cross toolchain + build tools)
 # ---------------------------------------------------------------------------
@@ -217,9 +232,13 @@ build_openssl() {
 
 build_lame() {
   stamp_done lame && return 0
-  log "Building lame (MP3 encoder)"
-  git_clone lame "$LAME_REPO" "$LAME_REF"
-  ( cd "$SRC/lame" \
+  log "Building lame $LAME_VERSION (MP3 encoder)"
+  local tarball="$SRC/lame-$LAME_VERSION.tar.gz"
+  download_tarball "$LAME_URL" "$tarball"
+  echo "$LAME_SHA256  $tarball" | sha256sum -c - \
+    || die "lame tarball checksum mismatch (override with LAME_SHA256=... if you use a custom LAME_URL)"
+  [ -d "$SRC/lame-$LAME_VERSION" ] || tar -xzf "$tarball" -C "$SRC"
+  ( cd "$SRC/lame-$LAME_VERSION" \
     && CFLAGS="$CFLAGS -Wno-implicit-function-declaration -Wno-implicit-int" \
        ./configure --prefix="$PREFIX" --host="$HOST_TRIPLE" \
          --disable-shared --enable-static --enable-nasm \

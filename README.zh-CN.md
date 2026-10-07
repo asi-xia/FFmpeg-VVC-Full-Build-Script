@@ -186,6 +186,7 @@ ffmpeg -hwaccel d3d11va -i in.mp4 -c:v libx264 out.mp4
 | 问题 | 解决 |
 |---|---|
 | GitHub 克隆慢/失败 | `GITHUB_MIRROR=https://ghproxy.net/https://github.com ./build.sh` |
+| lame 源码包下载失败（SourceForge） | 用镜像覆盖：`LAME_URL=<镜像地址> ./build.sh`（文件一致时无需改 `LAME_SHA256`） |
 | cmake 版本过低 (<3.19) | `pip install cmake` 或使用更新的发行版 |
 | Windows 全静态链接失败 | 脚本会自动回退为非全静态重试；或手动 `WINDOWS_FULLY_STATIC=0 ./build.sh ffmpeg` |
 | 某依赖编译失败后重跑 | 修好后 `./build.sh deps` 会自动跳过已成功的库（stamps 机制），`FORCE=1` 强制全部重建 |

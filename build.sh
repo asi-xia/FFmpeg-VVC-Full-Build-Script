@@ -242,6 +242,7 @@ build_lame() {
   ( cd "$SRC/lame-$LAME_VERSION" \
     && CFLAGS="$CFLAGS -Wno-implicit-function-declaration -Wno-implicit-int" \
        ./configure --prefix="$PREFIX" --disable-shared --enable-static --enable-nasm \
+         --disable-frontend \
     && make -j "$JOBS" && make install )
   mark_done lame
 }

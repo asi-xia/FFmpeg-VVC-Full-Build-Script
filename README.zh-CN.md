@@ -1,6 +1,6 @@
 # FFmpeg H.266(VVC) 全功能编译脚本
 
-在 **Linux (x86_64)** 或 **Windows (x86_64, MSYS2)** 上一键编译 FFmpeg，产物特性：
+在 **Linux (x86_64)** 或 **Windows (x86_64, MSYS2)** 上一键编译 FFmpeg，产物特性如下；另附 **Linux → Windows mingw-w64 交叉编译**脚本。
 
 [English](README.md)
 
@@ -37,13 +37,25 @@ cd /d/path/to/this/folder   # 进入脚本目录
 ./build.sh
 ```
 
+### 在 Linux 上交叉编译 Windows 版
+
+```bash
+./build-windows-cross.sh   # 自动安装 mingw-w64 工具链，交叉编译全部依赖 + ffmpeg
+```
+
+- 产物与 MSYS2 方式相同：`dist/ffmpeg-<版本>-windows-x86_64.tar.gz` / `.zip`（默认尝试全静态链接单文件 exe）；
+- 全部依赖（x264/x265/lame/opus/srt/vvenc/vvdec/OpenSSL/libvpl/AMF/ffnvcodec）都交叉编译到独立 prefix，不会混入宿主机 Linux 库；
+- TLS 使用 `schannel`（Windows 原生 API），exe 无外部 TLS/DLL 依赖；
+- 若安装了 `wine`，会自动用 wine 运行 exe 做特性校验；未安装则跳过校验；
+- 交叉编译模式下不构建 ffplay（没有交叉编译的 SDL2）。
+
 ### 产物
 
 - `dist/ffmpeg-<版本>-linux-x86_64.tar.gz`（含 `bin/ffmpeg`、`bin/ffprobe`）
 - `dist/ffmpeg-<版本>-windows-x86_64.tar.gz` / `.zip`（`ffmpeg.exe` 等，默认尝试全静态链接，单文件即可运行）
 
-> 脚本按平台各跑一次即可分别得到 Linux 与 Windows 产物（Windows 产物需在 Windows/MSYS2 上编译；
-> Linux 下交叉编译 Windows 需要额外 mingw-w64 交叉工具链与交叉依赖，未包含在本脚本内）。
+> Windows 产物有两种获得方式：在 Windows 的 MSYS2 里运行 `build.sh`，或在 Linux 上运行
+> `build-windows-cross.sh`（mingw-w64 交叉编译）。
 
 ### 常用开关（环境变量）
 
@@ -60,7 +72,7 @@ FFMPEG_REF=master ./build.sh     # 使用 ffmpeg master 分支
 GITHUB_MIRROR=https://ghproxy.net/https://github.com ./build.sh   # 国内加速 github 克隆
 ```
 
-分步执行：`./build.sh sysdeps | deps | ffmpeg | verify | package | clean`
+分步执行：`./build.sh sysdeps | deps | ffmpeg | verify | package | clean`（`build-windows-cross.sh` 支持相同的分步子命令）
 
 ---
 
@@ -177,5 +189,5 @@ ffmpeg -hwaccel d3d11va -i in.mp4 -c:v libx264 out.mp4
 | cmake 版本过低 (<3.19) | `pip install cmake` 或使用更新的发行版 |
 | Windows 全静态链接失败 | 脚本会自动回退为非全静态重试；或手动 `WINDOWS_FULLY_STATIC=0 ./build.sh ffmpeg` |
 | 某依赖编译失败后重跑 | 修好后 `./build.sh deps` 会自动跳过已成功的库（stamps 机制），`FORCE=1` 强制全部重建 |
-| 想在 Linux 交叉编译 Windows 版 | 需要 mingw-w64 工具链 + 交叉编译全部依赖，工作量大，建议直接在 Windows MSYS2 下运行本脚本 |
+| 想在 Linux 交叉编译 Windows 版 | 使用 `./build-windows-cross.sh`（mingw-w64）；建议安装 `wine` 以便自动校验 exe 特性 |
 | H.266 没有硬件编解码？ | 是，目前主流 GPU 均不支持 VVC 硬编解码，只能软件（vvenc/vvdec），编码较慢属正常现象 |

@@ -1,6 +1,6 @@
 # FFmpeg VVC Full Build
 
-One-script FFmpeg build for **Linux (x86_64)** and **Windows (x86_64, MSYS2)** with H.266/VVC, WebRTC (WHIP/WHEP), SRT, RTMP and hardware acceleration.
+One-script FFmpeg build for **Linux (x86_64)** and **Windows (x86_64, MSYS2)** with H.266/VVC, WebRTC (WHIP/WHEP), SRT, RTMP and hardware acceleration. A **Linux → Windows mingw-w64 cross-build** script is included as well.
 
 [中文说明](README.zh-CN.md)
 
@@ -36,14 +36,25 @@ cd /d/path/to/this/folder
 ./build.sh
 ```
 
+### Cross-compile Windows binaries from Linux
+
+```bash
+./build-windows-cross.sh   # installs the mingw-w64 toolchain, cross-builds all deps + ffmpeg
+```
+
+- Produces the same `dist/ffmpeg-<version>-windows-x86_64.tar.gz` / `.zip` (fully static exe attempted by default);
+- All dependencies (x264/x265/lame/opus/srt/vvenc/vvdec/OpenSSL/libvpl/AMF/ffnvcodec) are cross-compiled into a separate prefix — no host libraries leak into the exe;
+- TLS backend is `schannel` (native Windows API), so the exe has no external TLS/DLL dependencies;
+- If `wine` is installed, the resulting exe is feature-verified automatically; otherwise verification is skipped;
+- `ffplay` is not built in cross mode (no cross SDL2).
+
 ### Artifacts
 
 - `dist/ffmpeg-<version>-linux-x86_64.tar.gz` (contains `bin/ffmpeg`, `bin/ffprobe`)
 - `dist/ffmpeg-<version>-windows-x86_64.tar.gz` / `.zip` (`ffmpeg.exe` etc.; a fully static single-file exe is attempted by default)
 
-> Run the script once per platform to get the Linux and Windows artifacts respectively.
-> Cross-compiling Windows binaries from Linux requires a mingw-w64 cross toolchain plus cross-built
-> dependencies and is not covered by this script.
+> Two ways to get the Windows artifacts: run `build.sh` inside MSYS2 on Windows, or run
+> `build-windows-cross.sh` on Linux (mingw-w64 cross-compilation).
 
 ### Environment overrides
 
@@ -60,7 +71,7 @@ FFMPEG_REF=master ./build.sh     # build ffmpeg master instead of release/8.0
 GITHUB_MIRROR=https://ghproxy.net/https://github.com ./build.sh   # GitHub mirror prefix
 ```
 
-Stages: `./build.sh sysdeps | deps | ffmpeg | verify | package | clean`
+Stages: `./build.sh sysdeps | deps | ffmpeg | verify | package | clean` (the same sub-commands work with `build-windows-cross.sh`)
 
 ---
 
@@ -178,5 +189,5 @@ Runtime requirements:
 | cmake too old (< 3.19) | `pip install cmake` or use a newer distro |
 | Fully static Windows link fails | The script automatically retries non-static; or rerun with `WINDOWS_FULLY_STATIC=0 ./build.sh ffmpeg` |
 | Dependency failed, rerunning | `./build.sh deps` skips already-succeeded libraries (stamp files); `FORCE=1` rebuilds everything |
-| Cross-compile Windows build on Linux | Needs mingw-w64 + cross-built deps; run this script inside MSYS2 on Windows instead |
+| Cross-compile Windows build on Linux | Use `./build-windows-cross.sh` (mingw-w64). Install `wine` to enable automatic verification of the exe |
 | No VVC hardware codec? | Correct — no mainstream GPU supports VVC encode/decode yet; vvenc/vvdec are software-only and encoding is slow by nature |

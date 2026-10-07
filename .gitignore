@@ -1,0 +1,5 @@
+# Build tree (sources, intermediate objects, prefixes)
+build/
+
+# Packaged artifacts
+dist/

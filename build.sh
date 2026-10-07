@@ -23,7 +23,7 @@
 #   ENABLE_QSV=0          skip Intel QSV / libvpl
 #   ENABLE_NVIDIA=0       skip NVENC/NVDEC (ffnvcodec headers)
 #   ENABLE_AMF=0          skip AMD AMF (Windows only)
-#   ENABLE_FFPLAY=1       also build ffplay (requires SDL2)
+#   ENABLE_FFPLAY=0       disable ffplay (default: 1, requires SDL2)
 #   WINDOWS_FULLY_STATIC=0  do not attempt a fully static Windows exe
 #   FFMPEG_REF=master     ffmpeg git ref (default: release/8.0)
 #   GITHUB_MIRROR=https://ghproxy.net/https://github.com
@@ -68,7 +68,7 @@ ENABLE_FDK="${ENABLE_FDK:-0}"
 ENABLE_QSV="${ENABLE_QSV:-1}"
 ENABLE_NVIDIA="${ENABLE_NVIDIA:-1}"
 ENABLE_AMF="${ENABLE_AMF:-1}"
-ENABLE_FFPLAY="${ENABLE_FFPLAY:-0}"
+ENABLE_FFPLAY="${ENABLE_FFPLAY:-1}"
 WINDOWS_FULLY_STATIC="${WINDOWS_FULLY_STATIC:-1}"
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

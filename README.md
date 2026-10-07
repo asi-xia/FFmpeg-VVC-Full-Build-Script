@@ -52,8 +52,8 @@ cd /d/path/to/this/folder
 
 ### Artifacts
 
-- `dist/ffmpeg-<version>-linux-x86_64.tar.gz` (contains `bin/ffmpeg`, `bin/ffprobe`, `bin/vvdecapp`)
-- `dist/ffmpeg-<version>-windows-x86_64.tar.gz` / `.zip` (`ffmpeg.exe` etc.; a fully static single-file exe is attempted by default)
+- `dist/ffmpeg-<version>-linux-x86_64.tar.gz` (contains `bin/ffmpeg`, `bin/ffprobe`, `bin/ffplay`, `bin/vvdecapp`)
+- `dist/ffmpeg-<version>-windows-x86_64.tar.gz` / `.zip` (`ffmpeg.exe`, `ffprobe.exe`, `ffplay.exe` etc.; a fully static single-file exe is attempted by default)
 
 > Two ways to get the Windows artifacts: run `build.sh` inside MSYS2 on Windows, or run
 > `build-windows-cross.sh` on Linux (mingw-w64 cross-compilation).
@@ -67,7 +67,7 @@ SKIP_SYSDEPS=1 ./build.sh        # do not install system packages (bring your ow
 ENABLE_FDK=1 ./build.sh          # also build/link libfdk-aac (GPL-incompatible, personal use only)
 ENABLE_QSV=0 ./build.sh          # skip Intel QSV
 ENABLE_NVIDIA=0 ./build.sh       # skip NVENC/NVDEC
-ENABLE_FFPLAY=1 ./build.sh       # also build ffplay (requires SDL2)
+ENABLE_FFPLAY=0 ./build.sh       # disable ffplay (built by default on native builds; requires SDL2)
 WINDOWS_FULLY_STATIC=0 ./build.sh# do not attempt a fully static Windows exe
 FFMPEG_REF=master ./build.sh     # build ffmpeg master instead of release/8.0
 GITHUB_MIRROR=https://ghproxy.net/https://github.com ./build.sh   # GitHub mirror prefix

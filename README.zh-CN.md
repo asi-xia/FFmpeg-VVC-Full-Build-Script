@@ -54,8 +54,8 @@ cd /d/path/to/this/folder   # 进入脚本目录
 
 ### 产物
 
-- `dist/ffmpeg-<版本>-linux-x86_64.tar.gz`（含 `bin/ffmpeg`、`bin/ffprobe`、`bin/vvdecapp`）
-- `dist/ffmpeg-<版本>-windows-x86_64.tar.gz` / `.zip`（`ffmpeg.exe` 等，默认尝试全静态链接，单文件即可运行）
+- `dist/ffmpeg-<版本>-linux-x86_64.tar.gz`（含 `bin/ffmpeg`、`bin/ffprobe`、`bin/ffplay`、`bin/vvdecapp`）
+- `dist/ffmpeg-<版本>-windows-x86_64.tar.gz` / `.zip`（`ffmpeg.exe`、`ffprobe.exe`、`ffplay.exe` 等，默认尝试全静态链接，单文件即可运行）
 
 > Windows 产物有两种获得方式：在 Windows 的 MSYS2 里运行 `build.sh`，或在 Linux 上运行
 > `build-windows-cross.sh`（mingw-w64 交叉编译）。
@@ -69,7 +69,7 @@ SKIP_SYSDEPS=1 ./build.sh        # 不安装系统包（自行保证依赖）
 ENABLE_FDK=1 ./build.sh          # 额外编入 libfdk-aac（与 GPL 不兼容，仅自用）
 ENABLE_QSV=0 ./build.sh          # 跳过 Intel QSV
 ENABLE_NVIDIA=0 ./build.sh       # 跳过 NVENC/NVDEC
-ENABLE_FFPLAY=1 ./build.sh       # 同时编译 ffplay（需要 SDL2）
+ENABLE_FFPLAY=0 ./build.sh       # 关闭 ffplay（本机构建默认开启，需要 SDL2）
 WINDOWS_FULLY_STATIC=0 ./build.sh# Windows 不做全静态链接
 FFMPEG_REF=master ./build.sh     # 使用 ffmpeg master 分支
 GITHUB_MIRROR=https://ghproxy.net/https://github.com ./build.sh   # 国内加速 github 克隆

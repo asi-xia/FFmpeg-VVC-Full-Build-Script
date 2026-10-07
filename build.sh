@@ -355,9 +355,9 @@ fix_vpl_pc() {
   grep -q 'includedir}/vpl' "$pc" || sed -i 's|^Cflags:.*|& -I${includedir}/vpl|' "$pc"
   local need
   if [ "$PLATFORM" = "windows" ]; then
-    need="-ldxgi -ld3d11 -lole32 -luuid -ladvapi32"
+    need="-lstdc++ -ldxgi -ld3d11 -lole32 -luuid -ladvapi32 -lversion"
   else
-    need="-ldl -lpthread"
+    need="-lstdc++ -ldl -lpthread"
   fi
   if ! grep -qF -- "$(echo "$need" | awk '{print $1}')" "$pc"; then
     if grep -q '^Libs.private:' "$pc"; then

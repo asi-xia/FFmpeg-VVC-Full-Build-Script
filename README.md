@@ -1,6 +1,6 @@
 # FFmpeg VVC Full Build
 
-One-script FFmpeg build for **Linux (x86_64)** and **Windows (x86_64, MSYS2)** with H.266/VVC, WebRTC (WHIP/WHEP), SRT, RTMP and hardware acceleration. A **Linux → Windows mingw-w64 cross-build** script is included as well.
+One-script FFmpeg build for **Linux (x86_64)** and **Windows (x86_64, MSYS2)** with H.266/VVC, WebRTC (WHIP push), SRT, RTMP and hardware acceleration. A **Linux → Windows mingw-w64 cross-build** script is included as well.
 
 [中文说明](README.zh-CN.md)
 
@@ -9,10 +9,10 @@ One-script FFmpeg build for **Linux (x86_64)** and **Windows (x86_64, MSYS2)** w
 | Video encode | H.266/VVC ([vvenc](https://github.com/fraunhoferhhi/vvenc)), H.264 (x264), H.265 (x265) |
 | Video decode | H.266/VVC (FFmpeg **native** decoder), H.264, H.265 — plus bundled **`vvdecapp`** standalone VVC decoder from the [vvdec](https://github.com/fraunhoferhhi/vvdec) project |
 | Audio | MP3 (lame), AAC (native encoder, optional fdk-aac), Opus (libopus) |
-| Streaming protocols | SRT (libsrt), RTMP/RTMPS (native), **WHIP/WHEP (WebRTC)** |
+| Streaming protocols | SRT (libsrt), RTMP/RTMPS (native), **WHIP (WebRTC push)** |
 | HW acceleration | NVIDIA NVENC/NVDEC/CUVID, Intel QSV (libvpl), AMD AMF (Windows), D3D11VA/DXVA2 (Windows), VA-API/VDPAU (Linux) |
 
-> **WebRTC note:** FFmpeg ships a **native WHIP muxer and WHEP demuxer since 8.0** (merged to master in June 2025) — no third-party libdatachannel fork required. This script builds `release/8.0` by default.
+> **WebRTC note:** FFmpeg ships a **native WHIP muxer (push) since 8.0** — no third-party libdatachannel fork required. There is **no WHEP demuxer (pull) in any FFmpeg release yet** (8.0 / 8.1 / 9.0 / master all register only `ff_whip_muxer`); it remains an unmerged patch ([FFmpeg PR #21603](https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/21603)). For low-latency **pull**, use SRT or RTMP instead. This script builds `release/8.0` by default.
 >
 > **VVC decoding note:** FFmpeg mainline has **no libvvdec wrapper** — `ffmpeg` decodes H.266 with its built-in native decoder (`-c:v vvc`). The (considerably faster) Fraunhofer vvdec is packaged alongside as the standalone tool `vvdecapp`, see section 2.1.
 
@@ -122,9 +122,9 @@ ffmpeg -re -i input.mp4 -c:v libx264 -tune zerolatency -b:v 2500k -c:a aac -ar 4
 # RTMPS works the same way: rtmps://... (via the built-in TLS stack)
 ```
 
-### 2.4 WebRTC (WHIP push / WHEP pull)
+### 2.4 WebRTC (WHIP push)
 
-WHIP/WHEP use HTTP(S) signaling + SRTP media, natively supported in FFmpeg >= 8.0:
+WHIP uses HTTP(S) signaling + SRTP media and is natively supported in FFmpeg >= 8.0. **WHEP (pull) is not in FFmpeg yet** — no release (8.0/8.1/9.0) or master registers a WHEP demuxer; it is still an unmerged patch ([PR #21603](https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/21603)). Use SRT/RTMP for low-latency pull until then.
 
 ```bash
 # WHIP push (video must be H.264/VP8/AV1, audio Opus — WebRTC does not support H.265/H.266)
@@ -134,14 +134,12 @@ ffmpeg -re -i input.mp4 \
   -f whip "http://SERVER:8080/whip/live"
 # Auth example: -headers $'Authorization: Bearer <token>\r\n'
 
-# WHEP pull and record/remux
-ffmpeg -i "http://SERVER:8080/whep/live" -c copy output.mp4
-
-# WHEP pull -> SRT forward (WebRTC to live streaming bridge)
-ffmpeg -i "http://SERVER:8080/whep/live" -c copy -f mpegts "srt://SERVER:9000?mode=caller"
+# Low-latency pull alternatives (until WHEP lands upstream):
+ffmpeg -i "srt://SERVER:9000?mode=caller" -c copy output.mp4      # SRT pull
+ffmpeg -i "rtmp://SERVER/live/stream" -c copy output.mp4          # RTMP pull
 ```
 
-> Run `ffmpeg -h muxer=whip` / `ffmpeg -h demuxer=whep` for all options (ICE servers, DTLS, etc.).
+> Run `ffmpeg -h muxer=whip` for all WHIP options (ICE servers, DTLS, etc.).
 
 ### 2.5 Hardware acceleration
 

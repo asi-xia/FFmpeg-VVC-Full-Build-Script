@@ -9,11 +9,13 @@
 | 视频编码 | H.266/VVC ([vvenc](https://github.com/fraunhoferhhi/vvenc))、H.264 (x264)、H.265 (x265) |
 | 视频解码 | H.266/VVC（FFmpeg **原生**解码器）、H.264、H.265 —— 另附带 [vvdec](https://github.com/fraunhoferhhi/vvdec) 项目的独立解码工具 **`vvdecapp`** |
 | 音频 | MP3 (lame)、AAC (原生编码器，可选 fdk-aac)、Opus (libopus) |
-| 推拉流协议 | SRT (libsrt)、RTMP/RTMPS (原生)、**WHIP/WHEP (WebRTC)** |
+| 推拉流协议 | SRT (libsrt)、RTMP/RTMPS (原生)、**WHIP (WebRTC 推流)** |
 | 硬件加速 | NVIDIA NVENC/NVDEC/CUVID、Intel QSV (libvpl)、AMD AMF (Windows)、D3D11VA/DXVA2 (Windows)、VA-API/VDPAU (Linux) |
 
-> WebRTC 说明：FFmpeg **8.0 起原生内置 WHIP muxer / WHEP demuxer**（2025-06 合入主线），无需第三方
-> libdatachannel 分支。脚本默认使用 `release/8.0` 分支。
+> WebRTC 说明：FFmpeg **8.0 起原生内置 WHIP muxer（推流）**，无需第三方 libdatachannel 分支。
+> 但**任何 FFmpeg 版本都还没有 WHEP demuxer（拉流）**——8.0 / 8.1 / 9.0 / master 均只注册了
+> `ff_whip_muxer`，WHEP 仍是未合入的补丁（[FFmpeg PR #21603](https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/21603)）。
+> 低延迟**拉流**请暂用 SRT 或 RTMP。脚本默认使用 `release/8.0` 分支。
 >
 > VVC 解码说明：FFmpeg 主线**没有 libvvdec 包装器**（master 也没有），`ffmpeg` 解码 H.266 用的是内置
 > 原生解码器（`-c:v vvc`）。速度更快的 Fraunhofer vvdec 以独立工具 `vvdecapp` 的形式随包发布，见 2.1 节。
@@ -124,9 +126,9 @@ ffmpeg -re -i input.mp4 -c:v libx264 -tune zerolatency -b:v 2500k -c:a aac -ar 4
 # RTMPS 同理: rtmps://...（依赖内置 TLS）
 ```
 
-### 2.4 WebRTC（WHIP 推流 / WHEP 拉流）
+### 2.4 WebRTC（WHIP 推流）
 
-WHIP/WHEP 使用 HTTP(S) 信令 + SRTP 媒体，FFmpeg ≥ 8.0 原生支持：
+WHIP 使用 HTTP(S) 信令 + SRTP 媒体，FFmpeg ≥ 8.0 原生支持。**WHEP（拉流）目前 FFmpeg 还没有**——任何发行版（8.0/8.1/9.0）和 master 都没有注册 WHEP demuxer，它仍是未合入的补丁（[PR #21603](https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/21603)）。在其合入前，低延迟拉流请改用 SRT/RTMP。
 
 ```bash
 # WHIP 推流（视频只能 H.264/VP8/AV1，音频 Opus —— WebRTC 规范不支持 H.265/H.266）
@@ -136,14 +138,12 @@ ffmpeg -re -i input.mp4 \
   -f whip "http://SERVER:8080/whip/live"
 # 如需鉴权: -headers $'Authorization: Bearer <token>\r\n' 或按服务端要求传 -ice_server 等参数
 
-# WHEP 拉流并录制/转封装
-ffmpeg -i "http://SERVER:8080/whep/live" -c copy output.mp4
-
-# WHEP 拉流 -> SRT 转发（WebRTC 转直播）
-ffmpeg -i "http://SERVER:8080/whep/live" -c copy -f mpegts "srt://SERVER:9000?mode=caller"
+# 低延迟拉流的替代方案（在 WHEP 合入主线之前）：
+ffmpeg -i "srt://SERVER:9000?mode=caller" -c copy output.mp4      # SRT 拉流
+ffmpeg -i "rtmp://SERVER/live/stream" -c copy output.mp4          # RTMP 拉流
 ```
 
-> 可用 `ffmpeg -h muxer=whip` / `ffmpeg -h demuxer=whep` 查看全部参数（ICE server、DTLS 等）。
+> 可用 `ffmpeg -h muxer=whip` 查看全部 WHIP 参数（ICE server、DTLS 等）。
 
 ### 2.5 硬件编解码
 

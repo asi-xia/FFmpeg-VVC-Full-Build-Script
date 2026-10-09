@@ -475,7 +475,8 @@ build_ffmpeg() {
 
   local LDEXEFLAGS=()
   if [ "$PLATFORM" = "windows" ] && [ "$WINDOWS_FULLY_STATIC" = "1" ]; then
-    LDEXEFLAGS+=(--extra-ldexeflags="-static")
+    # -static-libgcc/-static-libstdc++ keep the exe off libgcc_s_seh-1.dll etc.
+    LDEXEFLAGS+=(--extra-ldexeflags="-static -static-libgcc -static-libstdc++")
   fi
 
   local BUILD_DIR="$WORK/ffmpeg-build"
@@ -535,7 +536,13 @@ verify() {
   check "SRT protocol"                   "'$BIN' -hide_banner -protocols | grep -q srt"
   check "RTMP protocol"                  "'$BIN' -hide_banner -protocols | grep -q rtmp"
   check "WHIP muxer (WebRTC push)"       "'$BIN' -hide_banner -muxers | grep -q whip"
-  check "WHEP demuxer (WebRTC pull)"     "'$BIN' -hide_banner -demuxers | grep -q whep"
+  # WHEP demuxer is NOT in any released FFmpeg yet (unmerged patch). Report as a
+  # note, not a failure, so it does not trip the "features missing" warning.
+  if "$BIN" -hide_banner -demuxers 2>/dev/null | grep -q whep; then
+    printf '  [ OK ] WHEP demuxer (WebRTC pull)\n'
+  else
+    printf '  [ -- ] WHEP demuxer (WebRTC pull) - not in this FFmpeg version yet (use WHIP push, SRT/RTMP pull)\n'
+  fi
 
   if [ "$PLATFORM" = "windows" ]; then
     [ "$ENABLE_NVIDIA" = "1" ] && check "NVENC (h264_nvenc)" "'$BIN' -hide_banner -encoders | grep -q h264_nvenc"
@@ -571,6 +578,20 @@ package() {
   cp "$PREFIX/bin/vvencapp"* "$PKGDIR/bin/" 2>/dev/null || true
   cp "$BASE_DIR/README.md" "$PKGDIR/" 2>/dev/null || true
   cp "$BASE_DIR/README.zh-CN.md" "$PKGDIR/" 2>/dev/null || true
+
+  # Bundle MinGW runtime DLLs that the packaged exes actually import. ffmpeg may
+  # be fully static, but vvdecapp/vvencapp (CMake builds) link libgcc/libstdc++/
+  # libwinpthread dynamically, so the dist folder would not run without them.
+  if [ "$PLATFORM" = "windows" ] && command -v objdump >/dev/null 2>&1; then
+    local tc_bin dll
+    tc_bin="$(cd "$(dirname "$(command -v gcc)")" && pwd)"
+    for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll SDL2.dll; do
+      [ -f "$tc_bin/$dll" ] || continue
+      if objdump -p "$PKGDIR"/bin/*.exe 2>/dev/null | grep -qiF "$dll"; then
+        cp "$tc_bin/$dll" "$PKGDIR/bin/" && log "Bundling runtime DLL: $dll"
+      fi
+    done
+  fi
 
   log "Packaging -> $DIST/$NAME.tar.gz"
   tar -czf "$DIST/$NAME.tar.gz" -C "$WORK" "$NAME"

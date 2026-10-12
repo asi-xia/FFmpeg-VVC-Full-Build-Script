@@ -116,15 +116,29 @@ mark_done()  { touch "$STAMPS/$1.done"; }
 
 git_clone() {
   local dir="$1" url="$2" ref="${3:-}"
-  [ -d "$SRC/$dir" ] && return 0
+  if [ -d "$SRC/$dir" ]; then
+    # Re-clone only when we recorded a different ref last time (so switching
+    # FFMPEG_REF actually takes effect). Clones with no marker are left as-is to
+    # avoid re-downloading everything on the first run after this change.
+    local prev=""
+    [ -f "$SRC/$dir/.build_ref" ] && prev="$(cat "$SRC/$dir/.build_ref" 2>/dev/null)"
+    if [ -n "$ref" ] && [ -n "$prev" ] && [ "$prev" != "$ref" ]; then
+      log "Ref for '$dir' changed ('$prev' -> '$ref') - re-cloning"
+      rm -rf "$SRC/$dir"
+    else
+      return 0
+    fi
+  fi
   log "Cloning $url (${ref:-default branch}) -> $dir"
   if [ -n "$ref" ]; then
     if git clone --depth 1 --branch "$ref" "$url" "$SRC/$dir" 2>/dev/null; then
+      printf '%s\n' "$ref" > "$SRC/$dir/.build_ref"
       return 0
     fi
     warn "ref '$ref' not found for $url, falling back to default branch"
   fi
   git clone --depth 1 "$url" "$SRC/$dir"
+  printf '%s\n' "${ref:-default}" > "$SRC/$dir/.build_ref"
 }
 
 CMAKE_GEN="Unix Makefiles"

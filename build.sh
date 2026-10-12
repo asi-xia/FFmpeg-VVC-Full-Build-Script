@@ -145,15 +145,29 @@ mark_done()  { touch "$STAMPS/$1.done"; }
 # git_clone <dir> <url> [ref]
 git_clone() {
   local dir="$1" url="$2" ref="${3:-}"
-  [ -d "$SRC/$dir" ] && return 0
+  if [ -d "$SRC/$dir" ]; then
+    # Re-clone only when we recorded a different ref last time (so switching
+    # FFMPEG_REF actually takes effect). Clones with no marker are left as-is to
+    # avoid re-downloading everything on the first run after this change.
+    local prev=""
+    [ -f "$SRC/$dir/.build_ref" ] && prev="$(cat "$SRC/$dir/.build_ref" 2>/dev/null)"
+    if [ -n "$ref" ] && [ -n "$prev" ] && [ "$prev" != "$ref" ]; then
+      log "Ref for '$dir' changed ('$prev' -> '$ref') - re-cloning"
+      rm -rf "$SRC/$dir"
+    else
+      return 0
+    fi
+  fi
   log "Cloning $url (${ref:-default branch}) -> $dir"
   if [ -n "$ref" ]; then
     if git clone --depth 1 --branch "$ref" "$url" "$SRC/$dir" 2>/dev/null; then
+      printf '%s\n' "$ref" > "$SRC/$dir/.build_ref"
       return 0
     fi
     warn "ref '$ref' not found for $url, falling back to default branch"
   fi
   git clone --depth 1 "$url" "$SRC/$dir"
+  printf '%s\n' "${ref:-default}" > "$SRC/$dir/.build_ref"
 }
 
 CMAKE_GEN="Unix Makefiles"
@@ -196,17 +210,38 @@ install_sysdeps() {
   [ "$SKIP_SYSDEPS" = "1" ] && { warn "SKIP_SYSDEPS=1, assuming toolchain & dev packages installed"; return 0; }
   log "Installing system packages ($PLATFORM)"
   if [ "$PLATFORM" = "windows" ]; then
-    pacman -S --needed --noconfirm \
-      base-devel git cmake ninja nasm pkgconf diffutils patch python3 \
-      "$MSYS_PKG_PFX-toolchain" "$MSYS_PKG_PFX-nasm" "$MSYS_PKG_PFX-cmake" \
-      "$MSYS_PKG_PFX-pkgconf" "$MSYS_PKG_PFX-openssl" || die "pacman install failed"
+    # Best-effort: install ONLY what is actually missing, and never force-upgrade
+    # an existing toolchain. MSYS2 is a rolling distro that periodically renames
+    # core runtime libs (e.g. gcc 15 -> 16 replaces gcc-libs with libgcc); a
+    # partial upgrade triggered mid-build cannot satisfy dependencies and aborts
+    # the whole transaction. A working toolchain does not need upgrading to build.
+    local need_pkgs=()
+    command -v git        >/dev/null 2>&1 || need_pkgs+=(git)
+    command -v cmake      >/dev/null 2>&1 || need_pkgs+=(cmake "$MSYS_PKG_PFX-cmake")
+    command -v ninja      >/dev/null 2>&1 || need_pkgs+=(ninja)
+    command -v nasm       >/dev/null 2>&1 || need_pkgs+=(nasm "$MSYS_PKG_PFX-nasm")
+    command -v make       >/dev/null 2>&1 || need_pkgs+=(make "$MSYS_PKG_PFX-make")
+    command -v pkg-config >/dev/null 2>&1 || need_pkgs+=(pkgconf "$MSYS_PKG_PFX-pkgconf")
+    command -v patch      >/dev/null 2>&1 || need_pkgs+=(patch diffutils)
+    command -v gcc        >/dev/null 2>&1 || need_pkgs+=( \
+      "$MSYS_PKG_PFX-gcc" "$MSYS_PKG_PFX-binutils" "$MSYS_PKG_PFX-crt" \
+      "$MSYS_PKG_PFX-headers" "$MSYS_PKG_PFX-libstdc++" "$MSYS_PKG_PFX-libwinpthread")
+    # Libraries (no command to probe) - only add if not already installed.
+    pacman -Qq "$MSYS_PKG_PFX-openssl" >/dev/null 2>&1 || need_pkgs+=("$MSYS_PKG_PFX-openssl")
     if [ "$ENABLE_FFPLAY" = "1" ]; then
-      pacman -S --needed --noconfirm "$MSYS_PKG_PFX-SDL2" || true
+      pacman -Qq "$MSYS_PKG_PFX-SDL2" >/dev/null 2>&1 || need_pkgs+=("$MSYS_PKG_PFX-SDL2")
     fi
     # On MSYS2 use the prebuilt libvmaf (meson from source is unreliable in the
     # mingw env); build_vmaf() detects it via pkg-config and skips the meson path.
     if [ "$ENABLE_VMAF" = "1" ]; then
-      pacman -S --needed --noconfirm "$MSYS_PKG_PFX-vmaf" || true
+      pacman -Qq "$MSYS_PKG_PFX-vmaf" >/dev/null 2>&1 || need_pkgs+=("$MSYS_PKG_PFX-vmaf")
+    fi
+    if [ "${#need_pkgs[@]}" -gt 0 ]; then
+      log "Installing missing packages: ${need_pkgs[*]}"
+      pacman -S --needed --noconfirm "${need_pkgs[@]}" \
+        || warn "pacman reported errors; continuing (the tool check below catches real gaps). If a system upgrade is pending, run 'pacman -Syu' manually, then re-run."
+    else
+      log "Toolchain and required packages already present - skipping pacman"
     fi
   else
     local SUDO=""

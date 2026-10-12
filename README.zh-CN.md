@@ -75,11 +75,34 @@ ENABLE_NVIDIA=0 ./build.sh       # 跳过 NVENC/NVDEC
 ENABLE_VMAF=0 ./build.sh         # 跳过 libvmaf（VMAF 画质分析滤镜，默认开启）
 ENABLE_FFPLAY=0 ./build.sh       # 关闭 ffplay（本机构建默认开启，需要 SDL2）
 WINDOWS_FULLY_STATIC=0 ./build.sh# Windows 不做全静态链接
+FFMPEG_SHARED=1 ./build.sh       # 把 FFmpeg 自身的库编成共享库（avcodec-*.dll/.so）+ 头文件 + 导入库，即给 AI/推理程序（PyAV、torchcodec、自研绑定）用的 SDK；默认 0 = 自包含静态 exe
 FFMPEG_REF=master ./build.sh     # 使用 ffmpeg master 分支
 GITHUB_MIRROR=https://ghproxy.net/https://github.com ./build.sh   # 国内加速 github 克隆
 ```
 
 分步执行：`./build.sh sysdeps | deps | ffmpeg | verify | package | clean`（`build-windows-cross.sh` 支持相同的分步子命令）
+
+### 静态（默认）vs 共享 FFmpeg 库
+
+`WINDOWS_FULLY_STATIC` 和 `--disable-shared/--enable-static` 是**两件不同的事**，别混淆：
+
+- `--disable-shared --enable-static`（默认恒开）决定 **FFmpeg 自身的库**（libavcodec/libavformat…）怎么编。静态 = 直接链进 `ffmpeg.exe`，得到自包含的单文件、没有 `avcodec-*.dll`。普通命令行构建就要这个。
+- `WINDOWS_FULLY_STATIC` 只决定**最终 exe 链接**时是否把第三方/运行时库也强制静态（`-static`）。设 `=0` 时 exe 会动态导入 MSYS2 的 DLL（`libbz2-1.dll`、`libcurl-4.dll`、`libvmaf.dll`…），`package` 阶段会自动（递归）探测并把它们打进 `dist/bin`。
+
+当你需要把 FFmpeg 当**共享库**用时——比如 AI/推理程序或语言绑定（PyAV、torchcodec、decord、自研 C/C++/Python 代码）要在编译期链接 `libav*`、或运行期加载这些 DLL——就设 **`FFMPEG_SHARED=1`**。它会把 FFmpeg 切成 `--enable-shared --disable-static`，并让 `dist/` 变成完整 SDK（名字加 `-shared` 后缀）：
+
+```
+dist/ffmpeg-<ver>-<platform>-x86_64-shared/
+├── bin/     ffmpeg(.exe)、ffprobe、ffplay + avcodec-*.dll、avformat-*.dll、
+│            avutil-*.dll、avfilter-*.dll、swscale-*.dll、swresample-*.dll、
+│            avdevice-*.dll（Windows 下还含自动打包的第三方运行时 DLL）
+├── include/ libavcodec/ libavformat/ libavutil/ …（C 头文件）
+├── lib/     导入库（libav*.dll.a / *.lib）、Linux 下的 *.so，以及 *.pc
+│            pkg-config 文件——把 PKG_CONFIG_PATH 指到这里即可编译链接
+└── share/   vmaf/ 模型文件（当 ENABLE_VMAF=1）
+```
+
+注意：共享模式下 exe 依赖这些 FFmpeg DLL，请把 `bin/` 保持在一起（加载器会优先在 exe 同目录找 DLL）。**Linux** 下运行打包出来的程序需设 `LD_LIBRARY_PATH=<dist>/lib`（或把 `lib/` 装进系统路径），因为拷出来的 exe 里 rpath 仍指向构建树。`FFMPEG_SHARED=1` 意味着 exe 走非静态链接（此时 `WINDOWS_FULLY_STATIC` 被忽略）。`vvdecapp`/`vvencapp` 无论如何都会导入 MinGW 运行时 DLL。
 
 ---
 

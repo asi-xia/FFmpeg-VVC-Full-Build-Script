@@ -26,6 +26,10 @@
 #   ENABLE_VMAF=0         skip libvmaf (VMAF video-quality filter)
 #   ENABLE_FFPLAY=0       disable ffplay (default: 1, requires SDL2)
 #   WINDOWS_FULLY_STATIC=0  do not attempt a fully static Windows exe
+#   FFMPEG_SHARED=1       build FFmpeg's OWN libs as shared (avcodec-*.dll/.so)
+#                         + headers + import libs, i.e. an SDK for AI/inference
+#                         tooling (PyAV, torchcodec, custom bindings) that links
+#                         against libav*. Default 0 = self-contained static exe.
 #   FFMPEG_REF=master     ffmpeg git ref (default: release/8.0)
 #   VMAF_REF=v3.2.1       libvmaf (Netflix/vmaf) git ref
 #   GITHUB_MIRROR=https://ghproxy.net/https://github.com
@@ -86,6 +90,7 @@ ENABLE_AMF="${ENABLE_AMF:-1}"
 ENABLE_VMAF="${ENABLE_VMAF:-1}"
 ENABLE_FFPLAY="${ENABLE_FFPLAY:-1}"
 WINDOWS_FULLY_STATIC="${WINDOWS_FULLY_STATIC:-1}"
+FFMPEG_SHARED="${FFMPEG_SHARED:-0}"
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -527,8 +532,6 @@ build_ffmpeg() {
     --enable-gpl
     --enable-version3
     --disable-doc
-    --disable-shared
-    --enable-static
     # video codecs
     # (VVC decode = FFmpeg native decoder; mainline has no libvvdec wrapper)
     --enable-libx264
@@ -540,6 +543,17 @@ build_ffmpeg() {
     # protocols: SRT + TLS (needed for rtmps/https/srts and WHIP/WHEP signaling)
     --enable-libsrt
   )
+
+  # ---- FFmpeg library form: static (default) vs shared DLLs/.so ----
+  # Shared is what AI/inference tooling (PyAV, torchcodec, custom C/C++/Python
+  # bindings) needs: it emits avcodec-*.dll/avformat-*.dll/... plus headers and
+  # import libs, at the cost of the exe depending on those FFmpeg DLLs.
+  if [ "$FFMPEG_SHARED" = "1" ]; then
+    log "FFMPEG_SHARED=1 -> building FFmpeg libraries as SHARED (--enable-shared --disable-static)"
+    FLAGS+=(--enable-shared --disable-static)
+  else
+    FLAGS+=(--disable-shared --enable-static)
+  fi
 
   # ---- TLS backend ----
   if [ "$PLATFORM" = "windows" ]; then
@@ -595,7 +609,10 @@ build_ffmpeg() {
   fi
 
   local LDEXEFLAGS=()
-  if [ "$PLATFORM" = "windows" ] && [ "$WINDOWS_FULLY_STATIC" = "1" ]; then
+  # A shared FFmpeg build links the exe against avcodec-*.dll etc., so forcing
+  # -static there is contradictory; only attempt a fully-static exe for the
+  # default static build.
+  if [ "$PLATFORM" = "windows" ] && [ "$WINDOWS_FULLY_STATIC" = "1" ] && [ "$FFMPEG_SHARED" != "1" ]; then
     # -static-libgcc/-static-libstdc++ keep the exe off libgcc_s_seh-1.dll etc.
     LDEXEFLAGS+=(--extra-ldexeflags="-static -static-libgcc -static-libstdc++")
   fi
@@ -689,7 +706,8 @@ package() {
   BIN="$(ffmpeg_bin)"
   VER="$("$BIN" -hide_banner -version | head -1 | awk '{print $3}')"
   VER="${VER%%-*}"
-  if [ "$PLATFORM" = "windows" ]; then NAME="ffmpeg-$VER-windows-x86_64"; else NAME="ffmpeg-$VER-linux-x86_64"; fi
+  local suffix=""; [ "$FFMPEG_SHARED" = "1" ] && suffix="-shared"
+  if [ "$PLATFORM" = "windows" ]; then NAME="ffmpeg-$VER-windows-x86_64$suffix"; else NAME="ffmpeg-$VER-linux-x86_64$suffix"; fi
 
   local PKGDIR="$WORK/$NAME"
   rm -rf "$PKGDIR"; mkdir -p "$PKGDIR/bin"
@@ -701,23 +719,63 @@ package() {
   cp "$BASE_DIR/README.md" "$PKGDIR/" 2>/dev/null || true
   cp "$BASE_DIR/README.zh-CN.md" "$PKGDIR/" 2>/dev/null || true
 
+  # Shared build: FFmpeg's own libraries are shared objects (avcodec-*.dll on
+  # Windows / .so on Linux). Ship them next to the exes, and also package the
+  # headers (include/) and import libs + pkg-config files (lib/) so AI/inference
+  # toolchains can compile/link against libav*. Without this the exes would die
+  # with "avcodec-NN.dll not found".
+  if [ "$FFMPEG_SHARED" = "1" ]; then
+    cp "$OUT/bin/"*.dll "$PKGDIR/bin/" 2>/dev/null || true          # Windows: FFmpeg DLLs
+    [ -d "$OUT/lib" ]     && cp -r "$OUT/lib"     "$PKGDIR/" 2>/dev/null || true  # .so (Linux) + import libs + .pc
+    [ -d "$OUT/include" ] && cp -r "$OUT/include" "$PKGDIR/" 2>/dev/null || true  # libav* headers
+    log "Shared build: bundled FFmpeg libs + include/ + lib/ (import libs, .pc)"
+  fi
+
   # Bundle the VMAF model files (the libvmaf filter needs model_path=<json>).
   if [ "$ENABLE_VMAF" = "1" ] && ls "$PREFIX"/share/vmaf/*.json >/dev/null 2>&1; then
     mkdir -p "$PKGDIR/share/vmaf"
     cp "$PREFIX"/share/vmaf/*.json "$PKGDIR/share/vmaf/" && log "Bundling VMAF models -> share/vmaf/"
   fi
 
-  # Bundle MinGW runtime DLLs that the packaged exes actually import. ffmpeg may
-  # be fully static, but vvdecapp/vvencapp (CMake builds) link libgcc/libstdc++/
-  # libwinpthread dynamically, so the dist folder would not run without them.
+  # Bundle EVERY non-system runtime DLL the packaged binaries need, following
+  # transitive imports, so the dist folder runs standalone from cmd/Explorer
+  # (where the MSYS2 toolchain bin is not on PATH). With WINDOWS_FULLY_STATIC=0
+  # ffmpeg links bzlib/zlib/lzma/iconv/openssl/curl/vmaf dynamically (missing
+  # any of them -> "libbz2-1.dll not found" at launch), and vvdecapp/vvencapp
+  # (CMake builds) always link libgcc/libstdc++/libwinpthread. A hardcoded list
+  # drifts as deps change, so auto-detect from the binaries instead.
   if [ "$PLATFORM" = "windows" ] && command -v objdump >/dev/null 2>&1; then
-    local tc_bin dll
+    local tc_bin dll f
     tc_bin="$(cd "$(dirname "$(command -v gcc)")" && pwd)"
-    for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll SDL2.dll libvmaf.dll; do
+    local -a queue=() pefiles=()
+    local -A seen=()
+    # Seed with the imports of every packaged PE file: the exes AND, for a
+    # shared build, FFmpeg's own av*.dll (those are what import libcurl/libvmaf/
+    # libcrypto etc., not the exe). Using a real file list avoids passing an
+    # unmatched glob to objdump.
+    for f in "$PKGDIR"/bin/*.exe "$PKGDIR"/bin/*.dll; do
+      [ -f "$f" ] && pefiles+=("$f")
+    done
+    if [ "${#pefiles[@]}" -gt 0 ]; then
+      while IFS= read -r dll; do
+        [ -n "$dll" ] && queue+=("$dll")
+      done < <(objdump -p "${pefiles[@]}" 2>/dev/null \
+               | sed -n 's/.*DLL Name: *//Ip' | tr -d '\r' | sort -u)
+    fi
+    while [ "${#queue[@]}" -gt 0 ]; do
+      dll="${queue[0]}"
+      if [ "${#queue[@]}" -gt 1 ]; then queue=("${queue[@]:1}"); else queue=(); fi
+      case "$dll" in ''|api-ms-win-*|API-MS-WIN-*|ext-ms-win-*) continue ;; esac
+      [ -n "${seen[$dll]:-}" ] && continue
+      seen["$dll"]=1
+      # Anything not shipped by the toolchain bin is a Windows system DLL -> skip.
       [ -f "$tc_bin/$dll" ] || continue
-      if objdump -p "$PKGDIR"/bin/*.exe 2>/dev/null | grep -qiF "$dll"; then
-        cp "$tc_bin/$dll" "$PKGDIR/bin/" && log "Bundling runtime DLL: $dll"
-      fi
+      cp -f "$tc_bin/$dll" "$PKGDIR/bin/" && log "Bundling runtime DLL: $dll"
+      # Follow this DLL's own imports (transitive closure).
+      while IFS= read -r dll; do
+        [ -n "$dll" ] && queue+=("$dll")
+      done < <(objdump -p "$tc_bin/$dll" 2>/dev/null \
+               | sed -n 's/.*DLL Name: *//Ip' | tr -d '\r')
     done
   fi
 

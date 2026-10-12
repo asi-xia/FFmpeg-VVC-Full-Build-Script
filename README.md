@@ -71,11 +71,50 @@ ENABLE_NVIDIA=0 ./build.sh       # skip NVENC/NVDEC
 ENABLE_VMAF=0 ./build.sh         # skip libvmaf (VMAF video-quality filter; built by default)
 ENABLE_FFPLAY=0 ./build.sh       # disable ffplay (built by default on native builds; requires SDL2)
 WINDOWS_FULLY_STATIC=0 ./build.sh# do not attempt a fully static Windows exe
+FFMPEG_SHARED=1 ./build.sh       # build FFmpeg's OWN libs as shared (avcodec-*.dll/.so) + headers + import libs — an SDK for AI/inference tooling (PyAV, torchcodec, bindings). Default 0 = self-contained static exe
 FFMPEG_REF=master ./build.sh     # build ffmpeg master instead of release/8.0
 GITHUB_MIRROR=https://ghproxy.net/https://github.com ./build.sh   # GitHub mirror prefix
 ```
 
 Stages: `./build.sh sysdeps | deps | ffmpeg | verify | package | clean` (the same sub-commands work with `build-windows-cross.sh`)
+
+### Static (default) vs shared FFmpeg libraries
+
+`WINDOWS_FULLY_STATIC` and `--disable-shared/--enable-static` are two different
+things — do not confuse them:
+
+- `--disable-shared --enable-static` (always on by default) controls how
+  **FFmpeg's own libraries** (libavcodec/libavformat/…) are built. Static means
+  they are linked *into* `ffmpeg.exe`, so you get a self-contained binary and no
+  `avcodec-*.dll`. This is what you want for a normal CLI build.
+- `WINDOWS_FULLY_STATIC` only toggles whether the **final exe link** also forces
+  third-party/runtime libs to be static (`-static`). With `=0` the exe imports
+  MSYS2 DLLs (`libbz2-1.dll`, `libcurl-4.dll`, `libvmaf.dll`, …), which the
+  `package` stage auto-detects (transitively) and bundles into `dist/bin`.
+
+Set **`FFMPEG_SHARED=1`** when you need FFmpeg **as shared libraries** — e.g. an
+AI/inference program or language binding (PyAV, torchcodec, decord, custom
+C/C++/Python code) that links against `libav*` at build time or loads the DLLs at
+runtime. It switches FFmpeg to `--enable-shared --disable-static` and changes the
+`dist/` layout to a full SDK (name gets a `-shared` suffix):
+
+```
+dist/ffmpeg-<ver>-<platform>-x86_64-shared/
+├── bin/     ffmpeg(.exe), ffprobe, ffplay + avcodec-*.dll, avformat-*.dll,
+│            avutil-*.dll, avfilter-*.dll, swscale-*.dll, swresample-*.dll,
+│            avdevice-*.dll  (+ bundled third-party runtime DLLs on Windows)
+├── include/ libavcodec/ libavformat/ libavutil/ … (C headers)
+├── lib/     import libs (libav*.dll.a / *.lib), *.so on Linux, and *.pc
+│            pkg-config files — point PKG_CONFIG_PATH here to compile against it
+└── share/   vmaf/ model files (when ENABLE_VMAF=1)
+```
+
+Notes: in shared mode the exe depends on the FFmpeg DLLs, so keep `bin/` together
+(the loader finds DLLs next to the exe). On **Linux**, run the packaged binaries
+with `LD_LIBRARY_PATH=<dist>/lib` (or install `lib/` into a system path) since the
+copied exe's rpath still points at the build tree. `FFMPEG_SHARED=1` implies a
+non-static exe link (`WINDOWS_FULLY_STATIC` is ignored). `vvdecapp`/`vvencapp`
+always import the MinGW runtime DLLs regardless.
 
 ---
 

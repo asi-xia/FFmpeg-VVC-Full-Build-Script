@@ -17,7 +17,7 @@
 #
 # Environment overrides (same spirit as build.sh):
 #   JOBS=8 FORCE=1 SKIP_SYSDEPS=1 ENABLE_FDK=1 ENABLE_QSV=0 ENABLE_NVIDIA=0
-#   ENABLE_AMF=0 ENABLE_VMAF=0 WINDOWS_FULLY_STATIC=0 FFMPEG_REF=master
+#   ENABLE_AMF=0 ENABLE_VMAF=0 WINDOWS_FULLY_STATIC=0 FFMPEG_SHARED=1 FFMPEG_REF=master
 #   VMAF_REF=v3.2.1 (libvmaf git ref; needs meson, cross-built with a meson cross-file)
 #   GITHUB_MIRROR=https://ghproxy.net/https://github.com
 #
@@ -82,6 +82,7 @@ ENABLE_NVIDIA="${ENABLE_NVIDIA:-1}"
 ENABLE_AMF="${ENABLE_AMF:-1}"
 ENABLE_VMAF="${ENABLE_VMAF:-1}"
 WINDOWS_FULLY_STATIC="${WINDOWS_FULLY_STATIC:-1}"
+FFMPEG_SHARED="${FFMPEG_SHARED:-0}"
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK="$BASE_DIR/build/cross-windows-x86_64"
@@ -503,8 +504,6 @@ build_ffmpeg() {
     --enable-gpl
     --enable-version3
     --disable-doc
-    --disable-shared
-    --enable-static
     --disable-ffplay
     # video codecs
     # (VVC decode = FFmpeg native decoder; mainline has no libvvdec wrapper)
@@ -522,6 +521,16 @@ build_ffmpeg() {
     --enable-d3d11va
     --enable-dxva2
   )
+
+  # ---- FFmpeg library form: static (default) vs shared DLLs ----
+  # FFMPEG_SHARED=1 emits avcodec-*.dll/avformat-*.dll/... plus headers and
+  # import libs (an SDK for AI/inference tooling that links against libav*).
+  if [ "$FFMPEG_SHARED" = "1" ]; then
+    log "FFMPEG_SHARED=1 -> building FFmpeg libraries as SHARED (--enable-shared --disable-static)"
+    FLAGS+=(--enable-shared --disable-static)
+  else
+    FLAGS+=(--disable-shared --enable-static)
+  fi
 
   if pkg_exists fdk-aac; then FLAGS+=(--enable-libfdk-aac); fi
 
@@ -544,7 +553,9 @@ build_ffmpeg() {
   fi
 
   local LDEXEFLAGS=()
-  if [ "$WINDOWS_FULLY_STATIC" = "1" ]; then
+  # A shared FFmpeg links the exe against avcodec-*.dll, so -static contradicts
+  # it; only force a fully-static exe for the default static build.
+  if [ "$WINDOWS_FULLY_STATIC" = "1" ] && [ "$FFMPEG_SHARED" != "1" ]; then
     LDEXEFLAGS+=(--extra-ldexeflags="-static -static-libgcc -static-libstdc++")
   fi
 
@@ -640,7 +651,8 @@ package() {
     warn "wine not installed; using version label '$VER' from FFMPEG_REF"
   fi
   VER="${VER%%-*}"
-  NAME="ffmpeg-$VER-windows-x86_64"
+  local suffix=""; [ "$FFMPEG_SHARED" = "1" ] && suffix="-shared"
+  NAME="ffmpeg-$VER-windows-x86_64$suffix"
 
   local PKGDIR="$WORK/$NAME"
   rm -rf "$PKGDIR"; mkdir -p "$PKGDIR/bin"
@@ -651,26 +663,72 @@ package() {
   cp "$BASE_DIR/README.md" "$PKGDIR/" 2>/dev/null || true
   cp "$BASE_DIR/README.zh-CN.md" "$PKGDIR/" 2>/dev/null || true
 
+  # Shared build: ship FFmpeg's own DLLs (avcodec-*.dll ...) next to the exes,
+  # plus headers (include/) and import libs + pkg-config files (lib/) so
+  # AI/inference toolchains can link against libav*.
+  if [ "$FFMPEG_SHARED" = "1" ]; then
+    cp "$OUT/bin/"*.dll "$PKGDIR/bin/" 2>/dev/null || true
+    [ -d "$OUT/lib" ]     && cp -r "$OUT/lib"     "$PKGDIR/" 2>/dev/null || true
+    [ -d "$OUT/include" ] && cp -r "$OUT/include" "$PKGDIR/" 2>/dev/null || true
+    log "Shared build: bundled FFmpeg DLLs + include/ + lib/ (import libs, .pc)"
+  fi
+
   # Bundle the VMAF model files (the libvmaf filter needs model=path=<json>).
   if [ "$ENABLE_VMAF" = "1" ] && ls "$PREFIX"/share/vmaf/*.json >/dev/null 2>&1; then
     mkdir -p "$PKGDIR/share/vmaf"
     cp "$PREFIX"/share/vmaf/*.json "$PKGDIR/share/vmaf/" && log "Bundling VMAF models -> share/vmaf/"
   fi
 
-  # Bundle MinGW runtime DLLs the exes import (cross toolchain ships them). Best
+  # Bundle every runtime DLL the exes import, following transitive deps. Cross
+  # builds link third-party libs statically, but the mingw runtime
+  # (libgcc/libstdc++/libwinpthread, plus any dep built shared) is imported and
+  # must ship with the exe or it won't launch on a clean Windows machine. Best
   # effort: never fail packaging if a DLL cannot be located.
-  local cxobjdump="${CROSS}objdump" dll d found
+  local cxobjdump="${CROSS}objdump"
   command -v "$cxobjdump" >/dev/null 2>&1 || cxobjdump="objdump"
   if command -v "$cxobjdump" >/dev/null 2>&1; then
-    for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll; do
-      "$cxobjdump" -p "$PKGDIR"/bin/*.exe 2>/dev/null | grep -qiF "$dll" || continue
+    # Directories where the mingw runtime DLLs may live on the build host.
+    local -a dll_dirs=()
+    local gd dll found imp
+    gd="$(${CROSS}gcc -print-file-name= 2>/dev/null)"
+    [ -n "$gd" ] && dll_dirs+=("$gd")
+    dll_dirs+=("/usr/$HOST_TRIPLE/lib" "/usr/$HOST_TRIPLE/bin" "$PREFIX/bin")
+    # Seed with the imports of every packaged PE file: the exes AND, for a
+    # shared build, FFmpeg's own av*.dll (those import the mingw runtime).
+    local -a queue=() pefiles=()
+    local -A seen=()
+    local pf
+    for pf in "$PKGDIR"/bin/*.exe "$PKGDIR"/bin/*.dll; do
+      [ -f "$pf" ] && pefiles+=("$pf")
+    done
+    if [ "${#pefiles[@]}" -gt 0 ]; then
+      while IFS= read -r dll; do
+        [ -n "$dll" ] && queue+=("$dll")
+      done < <("$cxobjdump" -p "${pefiles[@]}" 2>/dev/null \
+               | sed -n 's/.*DLL Name: *//Ip' | tr -d '\r' | sort -u)
+    fi
+    while [ "${#queue[@]}" -gt 0 ]; do
+      dll="${queue[0]}"
+      if [ "${#queue[@]}" -gt 1 ]; then queue=("${queue[@]:1}"); else queue=(); fi
+      case "$dll" in ''|api-ms-win-*|API-MS-WIN-*|ext-ms-win-*) continue ;; esac
+      [ -n "${seen[$dll]:-}" ] && continue
+      seen["$dll"]=1
       found=""
-      for d in "$(${CROSS}gcc -print-file-name= 2>/dev/null)" \
-               "/usr/$HOST_TRIPLE/lib" "/usr/$HOST_TRIPLE/bin" "$PREFIX/bin"; do
+      for d in "${dll_dirs[@]}"; do
         [ -n "$d" ] && [ -f "$d/$dll" ] && { found="$d/$dll"; break; }
       done
-      [ -n "$found" ] || found="$(find /usr -name "$dll" 2>/dev/null | head -1)"
-      [ -n "$found" ] && cp "$found" "$PKGDIR/bin/" && log "Bundling runtime DLL: $dll"
+      # Last-resort search only for mingw-style runtime libs (avoid scanning
+      # /usr once per Windows system DLL like KERNEL32/ADVAPI32).
+      if [ -z "$found" ]; then
+        case "$dll" in
+          lib*.dll|zlib*.dll) found="$(find /usr -name "$dll" 2>/dev/null | head -1)" ;;
+        esac
+      fi
+      [ -n "$found" ] || continue
+      cp -f "$found" "$PKGDIR/bin/" && log "Bundling runtime DLL: $dll"
+      while IFS= read -r imp; do
+        [ -n "$imp" ] && queue+=("$imp")
+      done < <("$cxobjdump" -p "$found" 2>/dev/null | sed -n 's/.*DLL Name: *//Ip' | tr -d '\r')
     done
   fi
 

@@ -11,6 +11,7 @@
 | 音频 | MP3 (lame)、AAC (原生编码器，可选 fdk-aac)、Opus (libopus) |
 | 推拉流协议 | SRT (libsrt)、RTMP/RTMPS (原生)、**WHIP (WebRTC 推流)** |
 | 硬件加速 | NVIDIA NVENC/NVDEC/CUVID、Intel QSV (libvpl)、AMD AMF (Windows)、D3D11VA/DXVA2 (Windows)、VA-API/VDPAU (Linux) |
+| 画质分析 | **VMAF**（[Netflix/vmaf](https://github.com/Netflix/vmaf)），通过 `libvmaf` 滤镜 —— 官方模型 `.json` 文件（含全新 **VMAF v1**）打包在 `share/vmaf/` 下 |
 
 > WebRTC 说明：FFmpeg **8.0 起原生内置 WHIP muxer（推流）**，无需第三方 libdatachannel 分支。
 > 但**任何 FFmpeg 版本都还没有 WHEP demuxer（拉流）**——8.0 / 8.1 / 9.0 / master 均只注册了
@@ -71,6 +72,7 @@ SKIP_SYSDEPS=1 ./build.sh        # 不安装系统包（自行保证依赖）
 ENABLE_FDK=1 ./build.sh          # 额外编入 libfdk-aac（与 GPL 不兼容，仅自用）
 ENABLE_QSV=0 ./build.sh          # 跳过 Intel QSV
 ENABLE_NVIDIA=0 ./build.sh       # 跳过 NVENC/NVDEC
+ENABLE_VMAF=0 ./build.sh         # 跳过 libvmaf（VMAF 画质分析滤镜，默认开启）
 ENABLE_FFPLAY=0 ./build.sh       # 关闭 ffplay（本机构建默认开启，需要 SDL2）
 WINDOWS_FULLY_STATIC=0 ./build.sh# Windows 不做全静态链接
 FFMPEG_REF=master ./build.sh     # 使用 ffmpeg master 分支
@@ -176,6 +178,43 @@ ffmpeg -hwaccel d3d11va -i in.mp4 -c:v libx264 out.mp4
 - **Intel QSV**：Linux 需 `intel-media-driver`（iHD）或 `intel-vaapi-driver`；Windows 需 Intel 显卡驱动；
 - **AMD AMF**：Windows + AMD 显卡驱动；
 - **VA-API**：Linux 需对应 `/dev/dri/renderD128` 驱动。
+
+### 2.6 视频画质分析（VMAF）
+
+`libvmaf` 滤镜把失真视频与参考原片对比打分（VMAF 0–100，越高越好）。
+
+> MSYS2/发行版的 libvmaf 包**不内置任何模型**，因此本构建会把官方模型文件下载到 **`share/vmaf/`**，用 `model=path=<文件>` 指定。FFmpeg 8.0 里选项是 `model=path=...`（没有 `model_path`）。
+
+```bash
+# 用打包的默认模型打分（在 dist 目录下运行，或改用完整路径）
+ffmpeg -i distorted.mp4 -i reference.mp4 \
+  -lavfi "[0:v][1:v]libvmaf=model=path=share/vmaf/vmaf_v0.6.1.json" -f null -
+
+# VMAF v1 模型（libvmaf 3.2.x 新增）+ 输出 JSON 日志
+ffmpeg -i distorted.mp4 -i reference.mp4 \
+  -lavfi "[0:v][1:v]libvmaf=model=path=share/vmaf/vmaf_v1.0.16_3d0h.json:log_fmt=json:log_path=vmaf.json" \
+  -f null -
+
+# 同时输出 PSNR/SSIM
+ffmpeg -i distorted.mp4 -i reference.mp4 \
+  -lavfi "[0:v][1:v]libvmaf=model=path=share/vmaf/vmaf_v0.6.1.json:feature=name=psnr|name=ssim" \
+  -f null -
+```
+
+打包的模型（`share/vmaf/`）：
+
+| 文件 | 用途 |
+|---|---|
+| `vmaf_v0.6.1.json` | 默认高清模型（1080p，3H 观看距离） |
+| `vmaf_4k_v0.6.1.json` | 4K/超高清内容 |
+| `vmaf_v0.6.1neg.json` | “无增强增益”版本 —— 惩罚锐化/对比度之类的取巧处理 |
+| `vmaf_v1.0.16_3d0h.json` | **VMAF v1**，标准高清观看条件 |
+| `vmaf_v1.0.16_5d0h.json` | VMAF v1，更远观看距离（需要足够大的画面） |
+| `vmaf_v1.0.16_1d5h_2160.json`、`vmaf_v1.0.16_3d0h_2160.json` | VMAF v1，4K |
+
+> **Windows 路径提示：** 在 `-lavfi` 里，形如 `E:/...` 的盘符路径含有 `:`，会和滤镜的选项分隔符冲突。解决办法：`cd` 进该目录用**相对路径**（如上），或把冒号转义：`model=path=E\:/full/path/vmaf_v0.6.1.json`。
+>
+> **第一个**输入是失真视频，**第二个**是参考原片；两者分辨率、帧率、像素格式必须一致（不一致时在 `libvmaf` 前加 `scale`/`fps`/`format`）。全部参数见 `ffmpeg -h filter=libvmaf`。设 `ENABLE_VMAF=0` 可跳过 libvmaf。Windows 下使用 MSYS2 预编译包（`mingw-w64-ucrt-x86_64-vmaf`）；Linux 下脚本用 meson 从源码编译。两种情况都会自动下载模型文件。
 
 ---
 

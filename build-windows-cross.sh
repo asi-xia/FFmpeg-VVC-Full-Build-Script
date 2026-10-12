@@ -17,7 +17,8 @@
 #
 # Environment overrides (same spirit as build.sh):
 #   JOBS=8 FORCE=1 SKIP_SYSDEPS=1 ENABLE_FDK=1 ENABLE_QSV=0 ENABLE_NVIDIA=0
-#   ENABLE_AMF=0 WINDOWS_FULLY_STATIC=0 FFMPEG_REF=master
+#   ENABLE_AMF=0 ENABLE_VMAF=0 WINDOWS_FULLY_STATIC=0 FFMPEG_REF=master
+#   VMAF_REF=v3.2.1 (libvmaf git ref; needs meson, cross-built with a meson cross-file)
 #   GITHUB_MIRROR=https://ghproxy.net/https://github.com
 #
 # Notes:
@@ -59,6 +60,18 @@ AMF_REPO="${AMF_REPO:-$GITHUB/GPUOpen-LibrariesAndSDKs/AMF}"
 AMF_REF="${AMF_REF:-}"
 LIBVPL_REPO="${LIBVPL_REPO:-$GITHUB/intel/libvpl}"
 LIBVPL_REF="${LIBVPL_REF:-}"
+VMAF_REPO="${VMAF_REPO:-$GITHUB/Netflix/vmaf}"
+VMAF_REF="${VMAF_REF:-v3.2.1}"
+
+# libvmaf embeds no models, so the filter needs external .json files (model_path).
+# Paths are relative to the repo's model/ dir; the v1 models live in a subdir.
+if [ -n "${GITHUB_MIRROR:-}" ]; then
+  _vmaf_proxy="${GITHUB_MIRROR%/https://github.com}"
+  VMAF_MODEL_BASE="${VMAF_MODEL_BASE:-${_vmaf_proxy%/}/https://raw.githubusercontent.com/Netflix/vmaf/$VMAF_REF/model}"
+else
+  VMAF_MODEL_BASE="${VMAF_MODEL_BASE:-https://raw.githubusercontent.com/Netflix/vmaf/$VMAF_REF/model}"
+fi
+VMAF_MODELS="${VMAF_MODELS:-vmaf_v0.6.1.json vmaf_4k_v0.6.1.json vmaf_v0.6.1neg.json vmaf_v1.0.16/vmaf_v1.0.16_3d0h.json vmaf_v1.0.16/vmaf_v1.0.16_5d0h.json vmaf_v1.0.16/vmaf_v1.0.16_1d5h_2160.json vmaf_v1.0.16/vmaf_v1.0.16_3d0h_2160.json}"
 
 JOBS="${JOBS:-$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null) || echo 4)}"
 FORCE="${FORCE:-0}"
@@ -67,6 +80,7 @@ ENABLE_FDK="${ENABLE_FDK:-0}"
 ENABLE_QSV="${ENABLE_QSV:-1}"
 ENABLE_NVIDIA="${ENABLE_NVIDIA:-1}"
 ENABLE_AMF="${ENABLE_AMF:-1}"
+ENABLE_VMAF="${ENABLE_VMAF:-1}"
 WINDOWS_FULLY_STATIC="${WINDOWS_FULLY_STATIC:-1}"
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -133,6 +147,25 @@ set(PKG_CONFIG_USE_CMAKE_PREFIX_PATH ON)
 set(CMAKE_CROSSCOMPILING_EMULATOR "")
 EOF
 
+# Meson cross file (libvmaf is built with meson, not cmake)
+MESON_CROSS_FILE="$WORK/mingw-w64-x86_64-meson.ini"
+cat > "$MESON_CROSS_FILE" <<EOF
+[binaries]
+c = '${CROSS}gcc'
+cpp = '${CROSS}g++'
+ar = '${CROSS}ar'
+strip = '${CROSS}strip'
+windres = '${CROSS}windres'
+nasm = 'nasm'
+pkg-config = 'pkg-config'
+
+[host_machine]
+system = 'windows'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+EOF
+
 cmake_dep() {
   local dir="$1"; shift
   cmake -S "$SRC/$dir" -B "$SRC/$dir/_build" -G "$CMAKE_GEN" \
@@ -178,23 +211,23 @@ install_sysdeps() {
   if command -v apt-get >/dev/null 2>&1; then
     $SUDO apt-get update
     $SUDO apt-get install -y build-essential git cmake ninja-build nasm pkg-config \
-      python3 diffutils patch wget \
+      python3 meson diffutils patch wget \
       gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 mingw-w64-tools wine64 || \
     $SUDO apt-get install -y build-essential git cmake ninja-build nasm pkg-config \
-      python3 diffutils patch wget gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+      python3 meson diffutils patch wget gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
   elif command -v dnf >/dev/null 2>&1; then
     $SUDO dnf install -y gcc-c++ make git cmake ninja-build nasm pkgconf-pkg-config \
-      python3 patch mingw64-gcc mingw64-gcc-c++ wine || \
+      python3 meson patch mingw64-gcc mingw64-gcc-c++ wine || \
     $SUDO dnf install -y gcc-c++ make git cmake ninja-build nasm pkgconf-pkg-config \
-      python3 patch mingw64-gcc mingw64-gcc-c++
+      python3 meson patch mingw64-gcc mingw64-gcc-c++
   elif command -v pacman >/dev/null 2>&1; then
-    $SUDO pacman -S --needed --noconfirm base-devel git cmake ninja nasm pkgconf python3 \
+    $SUDO pacman -S --needed --noconfirm base-devel git cmake ninja nasm pkgconf python3 meson \
       mingw-w64-gcc wine || \
-    $SUDO pacman -S --needed --noconfirm base-devel git cmake ninja nasm pkgconf python3 mingw-w64-gcc
+    $SUDO pacman -S --needed --noconfirm base-devel git cmake ninja nasm pkgconf python3 meson mingw-w64-gcc
   elif command -v zypper >/dev/null 2>&1; then
-    $SUDO zypper install -y gcc-c++ make git cmake ninja nasm pkg-config python3 patch \
+    $SUDO zypper install -y gcc-c++ make git cmake ninja nasm pkg-config python3 meson patch \
       crossmingw64-gcc crossmingw64-gcc-c++ || \
-    $SUDO zypper install -y gcc-c++ make git cmake ninja nasm pkg-config python3 patch
+    $SUDO zypper install -y gcc-c++ make git cmake ninja nasm pkg-config python3 meson patch
   else
     warn "Unknown package manager; install manually: mingw-w64 gcc/g++, cmake(>=3.19), nasm, pkg-config, git"
   fi
@@ -338,6 +371,56 @@ build_libvpl() {
   mark_done libvpl
 }
 
+build_vmaf() {
+  [ "$ENABLE_VMAF" = "1" ] || return 0
+  stamp_done vmaf && return 0
+  log "Building libvmaf (Netflix VMAF - video quality analysis, cross)"
+  if ! command -v meson >/dev/null 2>&1; then
+    warn "meson not found - libvmaf skipped (install meson, or set ENABLE_VMAF=0)"
+    return 1
+  fi
+  git_clone vmaf "$VMAF_REPO" "$VMAF_REF"
+  local mdir="$SRC/vmaf/libvmaf"
+  rm -rf "$mdir/build"
+  if ! ( cd "$mdir" \
+      && meson setup build --cross-file "$MESON_CROSS_FILE" \
+           --prefix="$PREFIX" --buildtype=release --default-library=static \
+           -Denable_tests=false -Denable_docs=false -Denable_tools=false \
+           -Dbuilt_in_models=true \
+      && ninja -C build -j "$JOBS" \
+      && ninja -C build install ); then
+    warn "libvmaf cross build failed - VMAF filter will be disabled"
+    return 1
+  fi
+  mark_done vmaf
+}
+
+# Download the official VMAF model .json files into $PREFIX/share/vmaf so the
+# libvmaf filter can be used with model=path=... (the packages embed none).
+fetch_vmaf_models() {
+  [ "$ENABLE_VMAF" = "1" ] || return 0
+  local destdir="$PREFIX/share/vmaf"
+  mkdir -p "$destdir"
+  local rel base_name ok=0 total=0
+  for rel in $VMAF_MODELS; do
+    total=$((total + 1))
+    base_name="$(basename "$rel")"
+    if [ -s "$destdir/$base_name" ]; then ok=$((ok + 1)); continue; fi
+    log "Fetching VMAF model: $base_name"
+    if curl -fsSL --retry 3 --connect-timeout 20 -o "$destdir/$base_name" "$VMAF_MODEL_BASE/$rel"; then
+      ok=$((ok + 1))
+    else
+      warn "Failed to fetch VMAF model $rel (set VMAF_MODEL_BASE or GITHUB_MIRROR)"
+      rm -f "$destdir/$base_name"
+    fi
+  done
+  if [ "$ok" -eq 0 ]; then
+    warn "No VMAF models available - the libvmaf filter needs model=path=<json>"
+    return 1
+  fi
+  log "VMAF models ready: $ok/$total in $destdir"
+}
+
 # FFmpeg's configure probes libvpl with `#include <mfxvideo.h>` (no vpl/ prefix)
 # and links MFXLoad; source-built vpl.pc misses the header subdir and the
 # system libs required by the static dispatcher. Patch it (idempotent).
@@ -380,6 +463,8 @@ build_deps() {
   build_ffnvcodec
   build_amf
   build_libvpl || true
+  build_vmaf || warn "libvmaf failed, continuing without the VMAF filter"
+  fetch_vmaf_models || true
   build_fdk || warn "fdk-aac failed, continuing without it"
 }
 
@@ -438,9 +523,15 @@ build_ffmpeg() {
     warn "Intel QSV disabled (libvpl not available)"
   fi
 
+  if [ "$ENABLE_VMAF" = "1" ] && pkg_exists libvmaf; then
+    FLAGS+=(--enable-libvmaf)
+  else
+    warn "VMAF filter disabled (libvmaf not available)"
+  fi
+
   local LDEXEFLAGS=()
   if [ "$WINDOWS_FULLY_STATIC" = "1" ]; then
-    LDEXEFLAGS+=(--extra-ldexeflags="-static")
+    LDEXEFLAGS+=(--extra-ldexeflags="-static -static-libgcc -static-libstdc++")
   fi
 
   local BUILD_DIR="$WORK/ffmpeg-build"
@@ -504,10 +595,16 @@ verify() {
   check "MP3 encoder (libmp3lame)"       "$WINE_BIN '$BIN' -hide_banner -encoders | grep -q libmp3lame"
   check "AAC encoder (native)"           "$WINE_BIN '$BIN' -hide_banner -encoders | grep -qE '^[[:space:]]*A[.A-Z]*[[:space:]]+aac[[:space:]]'"
   check "Opus encoder (libopus)"         "$WINE_BIN '$BIN' -hide_banner -encoders | grep -q libopus"
+  [ "$ENABLE_VMAF" = "1" ] && check "VMAF filter (libvmaf)" "$WINE_BIN '$BIN' -hide_banner -filters | grep -qw libvmaf"
   check "SRT protocol"                   "$WINE_BIN '$BIN' -hide_banner -protocols | grep -q srt"
   check "RTMP protocol"                  "$WINE_BIN '$BIN' -hide_banner -protocols | grep -q rtmp"
   check "WHIP muxer (WebRTC push)"       "$WINE_BIN '$BIN' -hide_banner -muxers | grep -q whip"
-  check "WHEP demuxer (WebRTC pull)"     "$WINE_BIN '$BIN' -hide_banner -demuxers | grep -q whep"
+  # WHEP demuxer is not in any released FFmpeg yet (unmerged patch) - note, not a failure.
+  if $WINE_BIN "$BIN" -hide_banner -demuxers 2>/dev/null | grep -q whep; then
+    printf '  [ OK ] WHEP demuxer (WebRTC pull)\n'
+  else
+    printf '  [ -- ] WHEP demuxer (WebRTC pull) - not in this FFmpeg version yet (use WHIP push, SRT/RTMP pull)\n'
+  fi
   [ "$ENABLE_NVIDIA" = "1" ] && check "NVENC (h264_nvenc)" "$WINE_BIN '$BIN' -hide_banner -encoders | grep -q h264_nvenc"
   [ "$ENABLE_AMF" = "1" ]    && check "AMF (h264_amf)"     "$WINE_BIN '$BIN' -hide_banner -encoders | grep -q h264_amf"
   [ "$ENABLE_QSV" = "1" ]    && check "QSV (h264_qsv)"     "$WINE_BIN '$BIN' -hide_banner -encoders | grep -q h264_qsv"
@@ -539,6 +636,29 @@ package() {
   cp "$PREFIX/bin/vvencapp"* "$PKGDIR/bin/" 2>/dev/null || true
   cp "$BASE_DIR/README.md" "$PKGDIR/" 2>/dev/null || true
   cp "$BASE_DIR/README.zh-CN.md" "$PKGDIR/" 2>/dev/null || true
+
+  # Bundle the VMAF model files (the libvmaf filter needs model=path=<json>).
+  if [ "$ENABLE_VMAF" = "1" ] && ls "$PREFIX"/share/vmaf/*.json >/dev/null 2>&1; then
+    mkdir -p "$PKGDIR/share/vmaf"
+    cp "$PREFIX"/share/vmaf/*.json "$PKGDIR/share/vmaf/" && log "Bundling VMAF models -> share/vmaf/"
+  fi
+
+  # Bundle MinGW runtime DLLs the exes import (cross toolchain ships them). Best
+  # effort: never fail packaging if a DLL cannot be located.
+  local cxobjdump="${CROSS}objdump" dll d found
+  command -v "$cxobjdump" >/dev/null 2>&1 || cxobjdump="objdump"
+  if command -v "$cxobjdump" >/dev/null 2>&1; then
+    for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll; do
+      "$cxobjdump" -p "$PKGDIR"/bin/*.exe 2>/dev/null | grep -qiF "$dll" || continue
+      found=""
+      for d in "$(${CROSS}gcc -print-file-name= 2>/dev/null)" \
+               "/usr/$HOST_TRIPLE/lib" "/usr/$HOST_TRIPLE/bin" "$PREFIX/bin"; do
+        [ -n "$d" ] && [ -f "$d/$dll" ] && { found="$d/$dll"; break; }
+      done
+      [ -n "$found" ] || found="$(find /usr -name "$dll" 2>/dev/null | head -1)"
+      [ -n "$found" ] && cp "$found" "$PKGDIR/bin/" && log "Bundling runtime DLL: $dll"
+    done
+  fi
 
   log "Packaging -> $DIST/$NAME.tar.gz"
   tar -czf "$DIST/$NAME.tar.gz" -C "$WORK" "$NAME"

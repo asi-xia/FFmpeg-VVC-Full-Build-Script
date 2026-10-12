@@ -11,6 +11,7 @@ One-script FFmpeg build for **Linux (x86_64)** and **Windows (x86_64, MSYS2)** w
 | Audio | MP3 (lame), AAC (native encoder, optional fdk-aac), Opus (libopus) |
 | Streaming protocols | SRT (libsrt), RTMP/RTMPS (native), **WHIP (WebRTC push)** |
 | HW acceleration | NVIDIA NVENC/NVDEC/CUVID, Intel QSV (libvpl), AMD AMF (Windows), D3D11VA/DXVA2 (Windows), VA-API/VDPAU (Linux) |
+| Quality analysis | **VMAF** ([Netflix/vmaf](https://github.com/Netflix/vmaf)) via the `libvmaf` filter — official model `.json` files (incl. the new **VMAF v1**) bundled under `share/vmaf/` |
 
 > **WebRTC note:** FFmpeg ships a **native WHIP muxer (push) since 8.0** — no third-party libdatachannel fork required. There is **no WHEP demuxer (pull) in any FFmpeg release yet** (8.0 / 8.1 / 9.0 / master all register only `ff_whip_muxer`); it remains an unmerged patch ([FFmpeg PR #21603](https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/21603)). For low-latency **pull**, use SRT or RTMP instead. This script builds `release/8.0` by default.
 >
@@ -67,6 +68,7 @@ SKIP_SYSDEPS=1 ./build.sh        # do not install system packages (bring your ow
 ENABLE_FDK=1 ./build.sh          # also build/link libfdk-aac (GPL-incompatible, personal use only)
 ENABLE_QSV=0 ./build.sh          # skip Intel QSV
 ENABLE_NVIDIA=0 ./build.sh       # skip NVENC/NVDEC
+ENABLE_VMAF=0 ./build.sh         # skip libvmaf (VMAF video-quality filter; built by default)
 ENABLE_FFPLAY=0 ./build.sh       # disable ffplay (built by default on native builds; requires SDL2)
 WINDOWS_FULLY_STATIC=0 ./build.sh# do not attempt a fully static Windows exe
 FFMPEG_REF=master ./build.sh     # build ffmpeg master instead of release/8.0
@@ -172,6 +174,43 @@ Runtime requirements:
 - **Intel QSV**: Linux needs `intel-media-driver` (iHD) or `intel-vaapi-driver`; Windows needs the Intel GPU driver;
 - **AMD AMF**: Windows + AMD GPU driver;
 - **VA-API**: Linux driver exposing `/dev/dri/renderD128`.
+
+### 2.6 Video quality analysis (VMAF)
+
+The `libvmaf` filter scores a distorted clip against its reference (VMAF 0–100; higher is better).
+
+> The MSYS2/distro libvmaf packages embed **no built-in models**, so this build downloads the official model files into **`share/vmaf/`** and you select one with `model=path=<file>`. In FFmpeg 8.0 the option is `model=path=...` (there is no `model_path`).
+
+```bash
+# Score with the bundled default model (run from the dist folder, or use a full path)
+ffmpeg -i distorted.mp4 -i reference.mp4 \
+  -lavfi "[0:v][1:v]libvmaf=model=path=share/vmaf/vmaf_v0.6.1.json" -f null -
+
+# VMAF v1 model (new in libvmaf 3.2.x) + JSON log
+ffmpeg -i distorted.mp4 -i reference.mp4 \
+  -lavfi "[0:v][1:v]libvmaf=model=path=share/vmaf/vmaf_v1.0.16_3d0h.json:log_fmt=json:log_path=vmaf.json" \
+  -f null -
+
+# Also report PSNR/SSIM alongside VMAF
+ffmpeg -i distorted.mp4 -i reference.mp4 \
+  -lavfi "[0:v][1:v]libvmaf=model=path=share/vmaf/vmaf_v0.6.1.json:feature=name=psnr|name=ssim" \
+  -f null -
+```
+
+Bundled models (`share/vmaf/`):
+
+| File | Use |
+|---|---|
+| `vmaf_v0.6.1.json` | default HD model (1080p, 3H viewing distance) |
+| `vmaf_4k_v0.6.1.json` | 4K/UHD content |
+| `vmaf_v0.6.1neg.json` | "no enhancement gain" — penalizes sharpening/contrast tricks |
+| `vmaf_v1.0.16_3d0h.json` | **VMAF v1**, standard HD viewing condition |
+| `vmaf_v1.0.16_5d0h.json` | VMAF v1, farther viewing distance (needs a reasonably large frame) |
+| `vmaf_v1.0.16_1d5h_2160.json`, `vmaf_v1.0.16_3d0h_2160.json` | VMAF v1, 4K |
+
+> **Windows path note:** inside `-lavfi`, a drive-letter path such as `E:/...` contains `:`, which collides with the filter's option separator. Either `cd` into the folder and use a **relative** path (as above), or escape the colon: `model=path=E\:/full/path/vmaf_v0.6.1.json`.
+>
+> The **first** input is the distorted clip, the **second** the reference; both must share resolution, frame rate and pixel format (add `scale`/`fps`/`format` before `libvmaf` if not). Run `ffmpeg -h filter=libvmaf` for all options. Set `ENABLE_VMAF=0` to skip libvmaf. On Windows the prebuilt MSYS2 package (`mingw-w64-ucrt-x86_64-vmaf`) is used; on Linux the script builds libvmaf from source with meson. Model files are fetched either way.
 
 ---
 

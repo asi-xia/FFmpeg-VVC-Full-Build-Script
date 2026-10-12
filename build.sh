@@ -23,9 +23,11 @@
 #   ENABLE_QSV=0          skip Intel QSV / libvpl
 #   ENABLE_NVIDIA=0       skip NVENC/NVDEC (ffnvcodec headers)
 #   ENABLE_AMF=0          skip AMD AMF (Windows only)
+#   ENABLE_VMAF=0         skip libvmaf (VMAF video-quality filter)
 #   ENABLE_FFPLAY=0       disable ffplay (default: 1, requires SDL2)
 #   WINDOWS_FULLY_STATIC=0  do not attempt a fully static Windows exe
 #   FFMPEG_REF=master     ffmpeg git ref (default: release/8.0)
+#   VMAF_REF=v3.2.1       libvmaf (Netflix/vmaf) git ref
 #   GITHUB_MIRROR=https://ghproxy.net/https://github.com
 #                         mirror prefix used for github.com clones
 #
@@ -60,6 +62,19 @@ AMF_REPO="${AMF_REPO:-$GITHUB/GPUOpen-LibrariesAndSDKs/AMF}"
 AMF_REF="${AMF_REF:-}"
 LIBVPL_REPO="${LIBVPL_REPO:-$GITHUB/intel/libvpl}"
 LIBVPL_REF="${LIBVPL_REF:-}"
+VMAF_REPO="${VMAF_REPO:-$GITHUB/Netflix/vmaf}"
+VMAF_REF="${VMAF_REF:-v3.2.1}"
+
+# libvmaf ships no models inside the MSYS2/most distro packages, so the filter
+# needs external .json model files (model_path=...). Fetch the official ones.
+# Paths are relative to the repo's model/ dir; the v1 models live in a subdir.
+if [ -n "${GITHUB_MIRROR:-}" ]; then
+  _vmaf_proxy="${GITHUB_MIRROR%/https://github.com}"
+  VMAF_MODEL_BASE="${VMAF_MODEL_BASE:-${_vmaf_proxy%/}/https://raw.githubusercontent.com/Netflix/vmaf/$VMAF_REF/model}"
+else
+  VMAF_MODEL_BASE="${VMAF_MODEL_BASE:-https://raw.githubusercontent.com/Netflix/vmaf/$VMAF_REF/model}"
+fi
+VMAF_MODELS="${VMAF_MODELS:-vmaf_v0.6.1.json vmaf_4k_v0.6.1.json vmaf_v0.6.1neg.json vmaf_v1.0.16/vmaf_v1.0.16_3d0h.json vmaf_v1.0.16/vmaf_v1.0.16_5d0h.json vmaf_v1.0.16/vmaf_v1.0.16_1d5h_2160.json vmaf_v1.0.16/vmaf_v1.0.16_3d0h_2160.json}"
 
 JOBS="${JOBS:-$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null) || echo 4)}"
 FORCE="${FORCE:-0}"
@@ -68,6 +83,7 @@ ENABLE_FDK="${ENABLE_FDK:-0}"
 ENABLE_QSV="${ENABLE_QSV:-1}"
 ENABLE_NVIDIA="${ENABLE_NVIDIA:-1}"
 ENABLE_AMF="${ENABLE_AMF:-1}"
+ENABLE_VMAF="${ENABLE_VMAF:-1}"
 ENABLE_FFPLAY="${ENABLE_FFPLAY:-1}"
 WINDOWS_FULLY_STATIC="${WINDOWS_FULLY_STATIC:-1}"
 
@@ -187,6 +203,11 @@ install_sysdeps() {
     if [ "$ENABLE_FFPLAY" = "1" ]; then
       pacman -S --needed --noconfirm "$MSYS_PKG_PFX-SDL2" || true
     fi
+    # On MSYS2 use the prebuilt libvmaf (meson from source is unreliable in the
+    # mingw env); build_vmaf() detects it via pkg-config and skips the meson path.
+    if [ "$ENABLE_VMAF" = "1" ]; then
+      pacman -S --needed --noconfirm "$MSYS_PKG_PFX-vmaf" || true
+    fi
   else
     local SUDO=""
     if [ "$(id -u)" != "0" ]; then
@@ -197,20 +218,20 @@ install_sysdeps() {
     if command -v apt-get >/dev/null 2>&1; then
       $SUDO apt-get update
       $SUDO apt-get install -y build-essential git cmake ninja-build nasm pkg-config \
-        python3 diffutils patch wget \
+        python3 meson diffutils patch wget \
         libgnutls28-dev libssl-dev libva-dev libdrm-dev libvdpau-dev
       [ "$ENABLE_FFPLAY" = "1" ] && $SUDO apt-get install -y libsdl2-dev
     elif command -v dnf >/dev/null 2>&1; then
       $SUDO dnf install -y gcc-c++ make
-      $SUDO dnf install -y git cmake ninja-build nasm pkgconf-pkg-config python3 patch \
+      $SUDO dnf install -y git cmake ninja-build nasm pkgconf-pkg-config python3 meson patch \
         gnutls-devel openssl-devel libva-devel libdrm-devel libvdpau-devel
       [ "$ENABLE_FFPLAY" = "1" ] && $SUDO dnf install -y SDL2-devel
     elif command -v pacman >/dev/null 2>&1; then
-      $SUDO pacman -S --needed --noconfirm base-devel git cmake ninja nasm pkgconf python3 \
+      $SUDO pacman -S --needed --noconfirm base-devel git cmake ninja nasm pkgconf python3 meson \
         gnutls openssl libva libdrm libvdpau
       [ "$ENABLE_FFPLAY" = "1" ] && $SUDO pacman -S --needed --noconfirm sdl2
     elif command -v zypper >/dev/null 2>&1; then
-      $SUDO zypper install -y gcc-c++ make git cmake ninja nasm pkg-config python3 patch \
+      $SUDO zypper install -y gcc-c++ make git cmake ninja nasm pkg-config python3 meson patch \
         libgnutls-devel libopenssl-devel libva-devel libdrm-devel vdpau-devel
       [ "$ENABLE_FFPLAY" = "1" ] && $SUDO zypper install -y libSDL2-devel
     else
@@ -368,6 +389,62 @@ fix_vpl_pc() {
   fi
 }
 
+build_vmaf() {
+  [ "$ENABLE_VMAF" = "1" ] || return 0
+  stamp_done vmaf && return 0
+  # use a system libvmaf (>= 2.0.0) if the distro already ships one
+  if pkg-config --atleast-version=2.0.0 libvmaf 2>/dev/null; then
+    log "Using system libvmaf ($(pkg-config --modversion libvmaf)) for the VMAF filter"
+    mark_done vmaf
+    return 0
+  fi
+  log "Building libvmaf (Netflix VMAF - video quality analysis)"
+  if ! command -v meson >/dev/null 2>&1; then
+    warn "meson not found - libvmaf skipped (install meson, or set ENABLE_VMAF=0)"
+    return 1
+  fi
+  git_clone vmaf "$VMAF_REPO" "$VMAF_REF"
+  local mdir="$SRC/vmaf/libvmaf"
+  rm -rf "$mdir/build"
+  if ! ( cd "$mdir" \
+      && meson setup build --prefix="$PREFIX" --buildtype=release \
+           --default-library=static \
+           -Denable_tests=false -Denable_docs=false -Denable_tools=false \
+           -Dbuilt_in_models=true \
+      && ninja -C build -j "$JOBS" \
+      && ninja -C build install ); then
+    warn "libvmaf build failed - VMAF filter will be disabled"
+    return 1
+  fi
+  mark_done vmaf
+}
+
+# Download the official VMAF model .json files into $PREFIX/share/vmaf so the
+# libvmaf filter can be used with model_path=... (the packages embed none).
+fetch_vmaf_models() {
+  [ "$ENABLE_VMAF" = "1" ] || return 0
+  local destdir="$PREFIX/share/vmaf"
+  mkdir -p "$destdir"
+  local rel base_name ok=0 total=0
+  for rel in $VMAF_MODELS; do
+    total=$((total + 1))
+    base_name="$(basename "$rel")"
+    if [ -s "$destdir/$base_name" ]; then ok=$((ok + 1)); continue; fi
+    log "Fetching VMAF model: $base_name"
+    if curl -fsSL --retry 3 --connect-timeout 20 -o "$destdir/$base_name" "$VMAF_MODEL_BASE/$rel"; then
+      ok=$((ok + 1))
+    else
+      warn "Failed to fetch VMAF model $rel (set VMAF_MODEL_BASE or GITHUB_MIRROR)"
+      rm -f "$destdir/$base_name"
+    fi
+  done
+  if [ "$ok" -eq 0 ]; then
+    warn "No VMAF models available - the libvmaf filter needs model_path=<json>"
+    return 1
+  fi
+  log "VMAF models ready: $ok/$total in $destdir"
+}
+
 build_fdk() {
   [ "$ENABLE_FDK" = "1" ] || return 0
   stamp_done fdk-aac && return 0
@@ -391,6 +468,8 @@ build_deps() {
   build_ffnvcodec
   build_amf
   build_libvpl || true
+  build_vmaf || warn "libvmaf failed, continuing without the VMAF filter"
+  fetch_vmaf_models || true
   build_fdk || warn "fdk-aac failed, continuing without it"
 }
 
@@ -452,6 +531,13 @@ build_ffmpeg() {
     FLAGS+=(--enable-libvpl)
   else
     warn "Intel QSV disabled (libvpl not available)"
+  fi
+
+  # ---- VMAF (video quality analysis) ----
+  if [ "$ENABLE_VMAF" = "1" ] && pkg_exists libvmaf; then
+    FLAGS+=(--enable-libvmaf)
+  else
+    warn "VMAF filter disabled (libvmaf not available)"
   fi
 
   # ---- platform specific hardware ----
@@ -533,6 +619,7 @@ verify() {
   check "MP3 encoder (libmp3lame)"       "'$BIN' -hide_banner -encoders | grep -q libmp3lame"
   check "AAC encoder (native)"           "'$BIN' -hide_banner -encoders | grep -qE '^[[:space:]]*A[.A-Z]*[[:space:]]+aac[[:space:]]'"
   check "Opus encoder (libopus)"         "'$BIN' -hide_banner -encoders | grep -q libopus"
+  [ "$ENABLE_VMAF" = "1" ] && check "VMAF filter (libvmaf)" "'$BIN' -hide_banner -filters | grep -qw libvmaf"
   check "SRT protocol"                   "'$BIN' -hide_banner -protocols | grep -q srt"
   check "RTMP protocol"                  "'$BIN' -hide_banner -protocols | grep -q rtmp"
   check "WHIP muxer (WebRTC push)"       "'$BIN' -hide_banner -muxers | grep -q whip"
@@ -579,13 +666,19 @@ package() {
   cp "$BASE_DIR/README.md" "$PKGDIR/" 2>/dev/null || true
   cp "$BASE_DIR/README.zh-CN.md" "$PKGDIR/" 2>/dev/null || true
 
+  # Bundle the VMAF model files (the libvmaf filter needs model_path=<json>).
+  if [ "$ENABLE_VMAF" = "1" ] && ls "$PREFIX"/share/vmaf/*.json >/dev/null 2>&1; then
+    mkdir -p "$PKGDIR/share/vmaf"
+    cp "$PREFIX"/share/vmaf/*.json "$PKGDIR/share/vmaf/" && log "Bundling VMAF models -> share/vmaf/"
+  fi
+
   # Bundle MinGW runtime DLLs that the packaged exes actually import. ffmpeg may
   # be fully static, but vvdecapp/vvencapp (CMake builds) link libgcc/libstdc++/
   # libwinpthread dynamically, so the dist folder would not run without them.
   if [ "$PLATFORM" = "windows" ] && command -v objdump >/dev/null 2>&1; then
     local tc_bin dll
     tc_bin="$(cd "$(dirname "$(command -v gcc)")" && pwd)"
-    for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll SDL2.dll; do
+    for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll SDL2.dll libvmaf.dll; do
       [ -f "$tc_bin/$dll" ] || continue
       if objdump -p "$PKGDIR"/bin/*.exe 2>/dev/null | grep -qiF "$dll"; then
         cp "$tc_bin/$dll" "$PKGDIR/bin/" && log "Bundling runtime DLL: $dll"
